@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -191,68 +191,144 @@
     showLogin();
   }
 
+  /* ---------------- icons (line icons, 24px grid) ---------------- */
+  const IC = {
+    home: ['p:M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'],
+    cart: ['c:9,20,1.5', 'c:18,20,1.5', 'p:M2.5 3h2.2l2.4 11.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.1L21 7H6'],
+    clock: ['c:12,12,9', 'p:M12 7v5l3 2'],
+    users: ['c:9.5,8,3.5', 'p:M3 20v-1a5 5 0 0 1 5-5h3a5 5 0 0 1 5 5v1', 'p:M16 4.6a3.5 3.5 0 0 1 0 6.8', 'p:M21 20v-1a5 5 0 0 0-3-4.6'],
+    menu: ['p:M4 7h16M4 12h16M4 17h16'],
+    chart: ['p:M3 21h18', 'p:M7 17v-5', 'p:M12 17V7', 'p:M17 17v-8'],
+    wallet: ['p:M19 7V5a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V6', 'p:M16.5 14h.01'],
+    undo: ['p:M3 12a9 9 0 1 0 3-6.7L3 8', 'p:M3 3v5h5'],
+    box: ['p:M21 8 12 3 3 8v8l9 5 9-5z', 'p:M3 8l9 5 9-5', 'p:M12 13v8'],
+    food: ['p:M6 3v7a2 2 0 0 0 4 0V3', 'p:M8 10v11', 'p:M18 21V3c-2.2 1.2-3.5 4-3.5 7.5V13H18'],
+    clipboard: ['p:M9 4h6v3H9z', 'p:M15 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2', 'p:M9 14l2 2 4-4'],
+    truck: ['p:M3 6h11v10H3z', 'p:M14 9h4l3 3v4h-7', 'c:7,18,2', 'c:17,18,2'],
+    shield: ['p:M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z', 'p:M9 12l2 2 4-4'],
+    sliders: ['p:M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1', 'c:15,6,2', 'c:9,12,2', 'c:17,18,2'],
+    file: ['p:M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z', 'p:M14 3v6h6', 'p:M8 13h8M8 17h5'],
+    sync: ['p:M20 11A8 8 0 0 0 6 6.3L4 8', 'p:M4 4v4h4', 'p:M4 13a8 8 0 0 0 14 4.7l2-1.7', 'p:M20 20v-4h-4'],
+    key: ['c:8,15,4', 'p:M10.9 12.1 20 3', 'p:M16.5 6.5l2 2', 'p:M14 9l2 2'],
+    globe: ['c:12,12,9', 'p:M3 12h18', 'p:M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18'],
+    book: ['p:M4 4.5A1.5 1.5 0 0 1 5.5 3H20v15H5.5A1.5 1.5 0 0 0 4 19.5z', 'p:M4 19.5A1.5 1.5 0 0 0 5.5 21H20v-3'],
+    logout: ['p:M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3', 'p:M10 17l5-5-5-5', 'p:M15 12H3'],
+    scan: ['p:M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3', 'p:M8 8v8M11 8v8M14 8v8M17 8v8'],
+    search: ['c:11,11,7', 'p:M20 20l-3.5-3.5'],
+    plus: ['p:M12 5v14M5 12h14'], minus: ['p:M5 12h14'], x: ['p:M6 6l12 12M18 6 6 18'], check: ['p:M5 12.5l4.5 4.5L19 7'],
+    down: ['p:M6 9l6 6 6-6'], right: ['p:M9 6l6 6-6 6'], left: ['p:M15 6l-6 6 6 6'],
+    user: ['c:12,8,4', 'p:M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'],
+    backspace: ['p:M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z', 'p:M12.5 9.5l5 5M17.5 9.5l-5 5'],
+    download: ['p:M12 3v12', 'p:M7 10l5 5 5-5', 'p:M5 21h14'],
+    chat: ['p:M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 21l2.1-5.4A8.5 8.5 0 1 1 21 11.5z'],
+    phone: ['p:M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2'],
+    edit: ['p:M4 20h4L19 9l-4-4L4 16z', 'p:M14 6l4 4'],
+    cash: ['p:M3 6h18v12H3z', 'c:12,12,2.5', 'p:M6.5 9.5h.01M17.5 14.5h.01'],
+    pause: ['p:M9 5v14M15 5v14'], trash: ['p:M4 7h16', 'p:M10 11v6M14 11v6', 'p:M6 7l1 13h10l1-13', 'p:M9 7V4h6v3'],
+    alert: ['p:M12 3.5 2.5 20h19z', 'p:M12 10v4.5', 'p:M12 17.5h.01'],
+    printer: ['p:M7 9V3h10v6', 'p:M7 17H4v-7h16v7h-3', 'p:M7 14h10v7H7z'],
+    send: ['p:M21 3 10 14', 'p:M21 3l-7 18-4-7-7-4z'],
+    inbox: ['p:M3 13h5l1.5 3h5L16 13h5', 'p:M5.5 5h13L21 13v6H3v-6z'],
+    store: ['p:M4 9l1.5-5h13L20 9', 'p:M4 9h16v1.5a3 3 0 0 1-5.3 1.8 3 3 0 0 1-5.4 0A3 3 0 0 1 4 10.5z', 'p:M5 13v8h14v-8', 'p:M10 21v-5h4v5'],
+    wifioff: ['p:M3 3l18 18', 'p:M8.5 16.5a5 5 0 0 1 7 0', 'p:M5 12.6a10 10 0 0 1 4.2-2.4', 'p:M12 20h.01', 'p:M14.8 10.3A10 10 0 0 1 19 12.6'],
+    okcircle: ['c:12,12,9', 'p:M8 12.5l3 3 5-6'],
+    star: ['p:M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z'],
+    tag: ['p:M3 12V4h8l10 10-8 8z', 'p:M7.5 7.5h.01'],
+    receipt: ['p:M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z', 'p:M9 8h6M9 12h6'],
+    bell: ['p:M6 16V11a6 6 0 0 1 12 0v5l2 2H4z', 'p:M10 21h4'],
+    lock: ['p:M6 11h12v10H6z', 'p:M8 11V7a4 4 0 0 1 8 0v4'],
+    install: ['p:M7 2h10a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z', 'p:M12 7v8', 'p:M9 12l3 3 3-3', 'p:M11 19h2'],
+    share: ['c:18,5,2.5', 'c:6,12,2.5', 'c:18,19,2.5', 'p:M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4'],
+    calendar: ['p:M4 5h16v16H4z', 'p:M4 10h16', 'p:M8 3v4M16 3v4']
+  };
+  function icon(name, cls) {
+    const parts = (IC[name] || IC.box).map(x => {
+      const k = x.slice(0, 2), v = x.slice(2);
+      if (k === 'c:') { const [cx, cy, r] = v.split(','); return `<circle cx="${cx}" cy="${cy}" r="${r}"/>`; }
+      return `<path d="${v}"/>`;
+    }).join('');
+    return `<svg class="i ${cls || ''}" viewBox="0 0 24 24" aria-hidden="true">${parts}</svg>`;
+  }
+
   /* ---------------- login screen ---------------- */
   async function showLogin() {
     stopCamera();
     document.getElementById('top').classList.add('hidden');
     document.getElementById('nav').classList.add('hidden');
+    const ob = document.getElementById('offbar'); if (ob) ob.remove();
     const main = document.getElementById('main');
-    let names = LS.get('names', []), sel = LS.get('lastUser', null), pin = '';
+    let names = LS.get('names', []), sel = LS.get('lastUser', null), pin = '', open = false;
+    main.className = 'page-in';
+    main.style.padding = '0';
     main.innerHTML = `<div class="login">
-      <img class="logo" src="icons/logo.png" alt="Saado">
-      <div class="row" style="margin-bottom:10px"><div class="seg" style="min-width:220px">
-        <button data-l="so" class="${S.lang === 'so' ? 'on' : ''}">Soomaali</button><button data-l="en" class="${S.lang === 'en' ? 'on' : ''}">English</button></div></div>
-      <div class="muted" id="lgmsg" style="margin-bottom:8px">${esc(t('Choose your name'))}</div>
-      <div class="names" id="names"></div>
-      <div id="pinarea" class="col hidden" style="align-items:center;width:100%">
-        <div class="pinshow" id="pinshow"></div>
-        <div class="pad" id="pad"></div>
-        <div id="lgerr" class="red bold" style="margin-top:10px;text-align:center;min-height:22px"></div>
+      <div class="lang"><button data-l="so" class="${S.lang === 'so' ? 'on' : ''}">Somali</button><button data-l="en" class="${S.lang === 'en' ? 'on' : ''}">English</button></div>
+      <img class="logo" src="icons/logo.png" alt="Saado Shop and Fast Food">
+      <h1>${esc(t('Welcome. Please Login'))}</h1>
+      <div class="box">
+        <div class="lgcard" id="ucard"><button class="dd" id="dd">${icon('user')}<span class="grow" id="ddv"></span>${icon('down', 'chev')}</button></div>
+        <div class="lgcard">
+          <div class="pinrow"><span>PIN</span><div class="pinshow" id="pinshow"></div></div>
+          <div class="pad" id="pad"></div>
+        </div>
+        <div class="lgerr" id="lgerr"></div>
       </div>
-      <div class="small muted" style="margin-top:auto;padding-top:20px">Saado POS v${APP_VERSION}</div></div>`;
-    main.style.paddingBottom = '0';
+      <div class="lgfoot">Saado POS · v${APP_VERSION}</div></div>`;
     main.querySelectorAll('[data-l]').forEach(b => b.onclick = () => { S.lang = b.dataset.l; LS.set('lang', S.lang); showLogin(); });
-    const drawNames = () => {
-      const box = document.getElementById('names'); if (!box) return;
-      box.innerHTML = names.length ? names.map(u => `<button data-id="${esc(u.id)}" class="${sel === u.id ? 'on' : ''}">${esc(u.name)}</button>`).join('')
-        : `<div class="muted" style="grid-column:1/-1;text-align:center">${esc(t('Loading names…'))}</div>`;
-      box.querySelectorAll('button').forEach(b => b.onclick = () => { sel = b.dataset.id; pin = ''; drawNames(); drawPin(); document.getElementById('pinarea').classList.remove('hidden'); document.getElementById('lgerr').textContent = ''; });
-      if (sel && names.find(u => u.id === sel)) document.getElementById('pinarea').classList.remove('hidden');
+    const drawSel = () => {
+      const u = names.find(x => x.id === sel);
+      document.getElementById('ddv').innerHTML = u ? esc(u.name) : `<span class="ph">${esc(names.length ? t('Choose your name') : t('Loading names…'))}</span>`;
+    };
+    const closeList = () => { open = false; const l = document.getElementById('ddlist'); if (l) l.remove(); document.getElementById('dd').classList.remove('open'); };
+    document.getElementById('dd').onclick = () => {
+      if (open) return closeList();
+      if (!names.length) return;
+      open = true; document.getElementById('dd').classList.add('open');
+      const l = document.createElement('div'); l.className = 'ddlist'; l.id = 'ddlist';
+      l.innerHTML = names.map(u => `<button data-id="${esc(u.id)}" class="${sel === u.id ? 'on' : ''}">${esc(u.name)}</button>`).join('');
+      document.getElementById('ucard').appendChild(l);
+      l.querySelectorAll('button').forEach(b => b.onclick = () => { sel = b.dataset.id; pin = ''; drawPin(); drawSel(); closeList(); document.getElementById('lgerr').textContent = ''; });
     };
     const drawPin = () => { const s = document.getElementById('pinshow'); if (s) s.innerHTML = [0, 1, 2, 3, 4, 5].slice(0, Math.max(4, pin.length)).map(i => `<i class="${i < pin.length ? 'f' : ''}"></i>`).join(''); };
     const pad = document.getElementById('pad');
-    pad.innerHTML = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', 'OK'].map(k => `<button data-k="${k}" class="${k === 'OK' ? 'go' : ''}">${k === 'OK' ? esc(t('Enter')) : k}</button>`).join('');
+    pad.innerHTML = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'bk', '0', 'OK'].map(k => `<button data-k="${k}" class="${k === 'OK' ? 'go' : k === 'bk' ? 'bk' : ''}" aria-label="${k === 'bk' ? 'delete' : k}">${k === 'OK' ? esc(t('Enter')) : k === 'bk' ? icon('backspace', 'lg') : k}</button>`).join('');
+    const err = m => { const e = document.getElementById('lgerr'); if (e) e.textContent = m; const ps = document.getElementById('pinshow'); if (ps) { ps.classList.remove('shake'); void ps.offsetWidth; ps.classList.add('shake'); } if (navigator.vibrate) navigator.vibrate(120); };
     const submit = async () => {
-      if (!sel || pin.length < 4) return;
-      const err = document.getElementById('lgerr');
-      err.innerHTML = `<span class="muted">${esc(t('Checking…'))}</span>`;
+      if (!sel) return err(t('Choose your name'));
+      if (pin.length < 4) return err(t('PIN must be 4 to 6 digits'));
+      const e = document.getElementById('lgerr'); e.innerHTML = `<span class="muted">${esc(t('Checking…'))}</span>`;
       try {
         const b = await api('login', { userId: sel, pin });
-        LS.set('lastUser', sel); startSession(b); boot();
-      } catch (e) { pin = ''; drawPin(); err.textContent = e.message; if (navigator.vibrate) navigator.vibrate(200); }
+        LS.set('lastUser', sel); main.style.padding = ''; startSession(b); boot();
+      } catch (x) { pin = ''; drawPin(); err(x.message); }
     };
     pad.querySelectorAll('button').forEach(b => b.onclick = () => {
       const k = b.dataset.k;
-      if (k === '⌫') pin = pin.slice(0, -1); else if (k === 'OK') return submit(); else if (pin.length < 6) pin += k;
-      drawPin(); if (navigator.vibrate) navigator.vibrate(10);
+      if (k === 'bk') pin = pin.slice(0, -1); else if (k === 'OK') return submit(); else if (pin.length < 6) pin += k;
+      drawPin(); if (navigator.vibrate) navigator.vibrate(8);
+      if (pin.length === 6) submit();
     });
     document.onkeydown = e => { if (!document.getElementById('pad')) { document.onkeydown = null; return; } if (/^\d$/.test(e.key) && pin.length < 6) { pin += e.key; drawPin(); } else if (e.key === 'Backspace') { pin = pin.slice(0, -1); drawPin(); } else if (e.key === 'Enter') submit(); };
-    drawNames(); drawPin();
+    drawSel(); drawPin();
     try {
       const r = await api('names', {});
-      names = r.users; LS.set('names', names); drawNames();
-    } catch (e) { const m = document.getElementById('lgmsg'); if (m) { m.className = 'red bold'; m.textContent = e.message; } if (names.length) drawNames(); }
+      names = r.users; LS.set('names', names);
+      if (sel && !names.find(u => u.id === sel)) sel = null;
+      drawSel();
+    } catch (e) { err(e.message); if (names.length) drawSel(); }
   }
 
   /* ---------------- shell ---------------- */
+  const TITLES = { home: 'Home', sell: 'Sell', shift: 'Shift', customers: 'Customers', expenses: 'Expenses', more: 'More', products: 'Products', stockcount: 'Stock count',
+    purchasing: 'Purchasing', ingredients: 'Ingredients', refunds: 'Refunds', reports: 'Reports', users: 'Users', settings: 'Settings', audit: 'Audit log', sync: 'Sync status', pin: 'My PIN', guide: 'Guide' };
   function navItems() {
     const n = [];
-    if (can('viewReports')) n.push(['home', '🏠', t('Home')]);
-    n.push(['sell', '🛒', t('Sell')]);
-    n.push(['shift', '⏱️', t('Shift')]);
-    if (can('customers') && (setting(S.biz + '_credit') === '1' || isOwner())) n.push(['customers', '👥', t('Customers')]);
-    else if (can('expenses')) n.push(['expenses', '💸', t('Expenses')]);
-    n.push(['more', '☰', t('More')]);
+    if (can('viewReports')) n.push(['home', 'home', t('Home')]);
+    n.push(['sell', 'cart', t('Sell')]);
+    n.push(['shift', 'clock', t('Shift')]);
+    if (can('viewReports')) n.push(['reports', 'chart', t('Reports')]);
+    else if (can('customers') && setting(S.biz + '_credit') === '1') n.push(['customers', 'users', t('Customers')]);
+    else if (can('expenses')) n.push(['expenses', 'wallet', t('Expenses')]);
+    n.push(['more', 'menu', t('More')]);
     return n;
   }
   function updateTop() {
@@ -260,49 +336,56 @@
     const pending = S.queue.length, mine = S.queue.filter(o => o.userId === S.user.id).length;
     const sd = document.getElementById('syncdot');
     if (sd) {
-      sd.className = 'syncdot' + (!S.online ? ' off' : pending ? ' wait' : '');
-      sd.textContent = !S.online ? '⚠ ' + t('Offline') + (pending ? ' · ' + pending : '') : S.syncing ? '↻ ' + mine : pending ? '⏳ ' + pending : '✓';
+      sd.className = 'syncdot' + (!S.online ? ' off' : pending ? ' wait' : '') + (S.syncing ? ' spin' : '');
+      sd.innerHTML = icon(!S.online ? 'wifioff' : S.syncing || pending ? 'sync' : 'okcircle') + (pending ? `<span class="n">${pending}</span>` : '');
+      sd.setAttribute('aria-label', !S.online ? t('Offline') : pending ? t('Waiting to send') + ' ' + mine : t('Everything is sent'));
     }
-    const ob = document.getElementById('offbar');
-    if (ob) ob.classList.toggle('hidden', S.online);
+    let ob = document.getElementById('offbar');
+    if (!S.online && !ob) { ob = document.createElement('div'); ob.id = 'offbar'; ob.className = 'offline-bar'; ob.innerHTML = icon('wifioff', 'sm') + '<span>' + esc(t('Offline: sales are saved on this phone and sent later.')) + '</span>'; top.after(ob); }
+    if (S.online && ob) ob.remove();
     const nb = document.querySelector('#nav [data-r="more"] .badge');
     const alerts = (S.data && S.data.pendingRefunds && can('approveRefunds') ? S.data.pendingRefunds : 0) + S.failed.length;
     if (nb) { nb.textContent = alerts; nb.classList.toggle('hidden', !alerts); }
+  }
+  function setTitle() {
+    const tt = document.querySelector('#top .ttl'); if (!tt) return;
+    tt.innerHTML = `<b>${esc(t(TITLES[S.route] || 'Saado'))}</b><span>${esc(S.user.name)} · ${esc(bizName(S.biz))}</span>`;
   }
   function drawShell() {
     const top = document.getElementById('top'), nav = document.getElementById('nav');
     top.classList.remove('hidden'); nav.classList.remove('hidden');
     const bizs = myBiz();
-    top.innerHTML = `<img src="icons/icon-192.png" alt=""><div class="title">Saado<small>${esc(S.user.name)} · ${esc(bizName(S.biz))}</small></div>
-      ${bizs.length > 1 ? `<div class="bizswitch">${bizs.map(b => `<button data-b="${b}" class="${S.biz === b ? 'on' : ''}">${esc(b === 'shop' ? t('Shop') : t('Food'))}</button>`).join('')}</div>` : '<div style="margin-left:auto"></div>'}
-      <button class="syncdot" id="syncdot"></button>
-      <div id="topprog" style="position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--gold);opacity:0;transition:opacity .2s"></div>`;
+    top.innerHTML = `<div class="emb"><img src="icons/icon-192.png" alt=""></div><div class="ttl"></div>
+      ${bizs.length > 1 ? `<div class="bizswitch">${bizs.map(b => `<button data-b="${b}" class="${S.biz === b ? 'on' : ''}" aria-label="${esc(bizName(b))}">${icon(b === 'shop' ? 'store' : 'food')}<span>${esc(b === 'shop' ? t('Shop') : t('Food'))}</span></button>`).join('')}</div>` : ''}
+      <button class="syncdot" id="syncdot"></button><div id="topprog"></div>`;
     top.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
       if (S.cart.length && b.dataset.b !== S.biz) { toast(t('Finish or park the current sale first'), 'warn'); return; }
       S.biz = b.dataset.b; LS.set('biz_' + S.user.id, S.biz); drawShell(); render();
     });
     document.getElementById('syncdot').onclick = () => go('sync');
-    nav.innerHTML = navItems().map(([r, ic, l]) => `<button data-r="${r}" class="${S.route === r ? 'on' : ''}"><span class="ic">${ic}</span>${esc(l)}${r === 'more' ? '<span class="badge hidden"></span>' : ''}</button>`).join('');
+    nav.innerHTML = navItems().map(([r, ic, l]) => `<button data-r="${r}" class="${S.route === r ? 'on' : ''}"><span class="ind">${icon(ic)}</span><span>${esc(l)}</span>${r === 'more' ? '<span class="badge hidden"></span>' : ''}</button>`).join('');
     nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.r));
-    let ob = document.getElementById('offbar');
-    if (!ob) { ob = document.createElement('div'); ob.id = 'offbar'; ob.className = 'offline-bar hidden'; top.after(ob); }
-    ob.textContent = t('Offline: sales are saved on this phone and sent later.');
-    updateTop();
+    setTitle(); updateTop();
   }
   function go(r) { if (location.hash !== '#' + r) location.hash = r; else render(); }
   function render() {
     if (!S.user || !S.token) return;
     stopCamera();
+    document.querySelectorAll('.ov').forEach(x => x.remove());
     let r = (location.hash || '').slice(1) || (can('viewReports') ? 'home' : 'sell');
     const scr = window.Screens && Screens[r.split('/')[0]];
-    if (!scr) r = 'sell';
+    if (!scr || typeof scr !== 'function' || r === 'productForm' || r === 'onSync') r = 'sell';
     S.route = r.split('/')[0];
-    document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.r === S.route || (S.route !== 'sell' && S.route !== 'home' && S.route !== 'shift' && S.route !== 'customers' && b.dataset.r === 'more' && !navItems().some(n => n[0] === S.route))));
+    const inNav = navItems().some(n => n[0] === S.route);
+    document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.r === S.route || (!inNav && b.dataset.r === 'more')));
     const main = document.getElementById('main');
-    main.style.paddingBottom = '';
+    main.style.padding = '';
+    main.className = '';
     main.innerHTML = '';
-    document.querySelectorAll('.cartbar').forEach(x => x.remove());
+    document.querySelectorAll('.cartbar, .fab').forEach(x => x.remove());
     window.scrollTo(0, 0);
+    setTitle();
+    void main.offsetWidth; main.className = 'page-in';
     try { Screens[S.route](main, r.split('/').slice(1)); } catch (e) { console.error(e); main.innerHTML = `<div class="card red">${esc(t('Something went wrong on this screen:'))} ${esc(e.message)}</div>`; }
   }
 
@@ -318,37 +401,40 @@
   /* ---------------- UI helpers ---------------- */
   function toast(msg, type, ms) {
     const box = document.getElementById('toasts');
-    while (box.children.length >= 1) box.firstChild.remove();   // one message at a time: easier to read when busy
-    const el = document.createElement('div'); el.className = 'toast ' + (type || ''); el.textContent = msg;
+    while (box.children.length >= 1) box.firstChild.remove();
+    const el = document.createElement('div'); el.className = 'toast ' + (type || '');
+    el.innerHTML = icon(type === 'ok' ? 'okcircle' : type === 'err' || type === 'warn' ? 'alert' : 'bell') + '<span></span>';
+    el.querySelector('span').textContent = msg;
     box.appendChild(el);
     el.onclick = () => el.remove();
-    setTimeout(() => el.remove(), ms || (type === 'err' ? 5000 : 2200));
+    setTimeout(() => el.remove(), ms || (type === 'err' ? 5000 : 2400));
     if (type === 'err' && navigator.vibrate) navigator.vibrate([60, 40, 60]);
   }
-  // sheet({title, body, actions:[{label, cls, onClick(close, el)}], onOpen(el, close), wide})
+  // sheet({title, body, actions:[{label, cls, onClick(close, el)}], onOpen(el, close), sticky})
   function sheet(o) {
     const ov = document.createElement('div'); ov.className = 'ov';
-    ov.innerHTML = `<div class="sheet"><div class="hd"><h2>${esc(o.title || '')}</h2><button class="x" aria-label="close">✕</button></div>
+    ov.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="hd"><h2>${esc(o.title || '')}</h2><button class="x" aria-label="close">${icon('x', 'sm')}</button></div>
       <div class="bd">${o.body || ''}</div>${o.actions && o.actions.length ? '<div class="ft"></div>' : ''}</div>`;
     document.body.appendChild(ov);
     const el = ov.querySelector('.sheet');
-    const close = () => { stopCamera(); ov.remove(); if (o.onClose) o.onClose(); };
+    let closed = false;
+    const close = () => { if (closed) return; closed = true; stopCamera(); ov.classList.add('closing'); setTimeout(() => ov.remove(), 180); if (o.onClose) o.onClose(); };
     ov.querySelector('.x').onclick = close;
     ov.addEventListener('click', e => { if (e.target === ov && !o.sticky) close(); });
     (o.actions || []).forEach(a => {
-      const b = document.createElement('button'); b.className = 'btn ' + (a.cls || ''); b.textContent = a.label;
+      const b = document.createElement('button'); b.className = 'btn ' + (a.cls || ''); b.innerHTML = (a.icon ? icon(a.icon) : '') + esc(a.label);
       b.onclick = () => a.onClick ? withBusy(b, () => a.onClick(close, el)) : close();
       ov.querySelector('.ft').appendChild(b);
     });
     if (o.onOpen) o.onOpen(el, close);
-    const first = el.querySelector('input[autofocus]'); if (first) setTimeout(() => first.focus(), 60);
+    const first = el.querySelector('input[autofocus]'); if (first) setTimeout(() => first.focus(), 120);
     return { el, close };
   }
   function confirmBox(msg, okLabel, cls) {
     return new Promise(res => {
       let done = false;
-      sheet({ title: t('Please confirm'), body: `<p style="font-size:17px">${esc(msg)}</p>`, onClose: () => { if (!done) res(false); },
-        actions: [{ label: t('Cancel'), onClick: c => { done = true; res(false); c(); } }, { label: okLabel || t('Yes'), cls: cls || 'primary', onClick: c => { done = true; res(true); c(); } }] });
+      sheet({ title: t('Please confirm'), body: `<p style="font-size:16px;margin:4px 2px">${esc(msg)}</p>`, onClose: () => { if (!done) res(false); },
+        actions: [{ label: t('Cancel'), cls: 'ghost', onClick: c => { done = true; res(false); c(); } }, { label: okLabel || t('Yes'), cls: cls || 'primary', onClick: c => { done = true; res(true); c(); } }] });
     });
   }
   function alertBox(title, html) { return sheet({ title, body: html, actions: [{ label: t('OK'), cls: 'primary' }] }); }
@@ -367,6 +453,32 @@
     box.querySelectorAll('button').forEach(b => b.onclick = e => { e.preventDefault(); box.querySelectorAll('button').forEach(x => x.classList.remove('on')); b.classList.add('on'); box.dataset.value = b.dataset.v; if (onChange) onChange(b.dataset.v); });
     const on = box.querySelector('.on'); if (on) box.dataset.value = on.dataset.v;
   }
+  // Material ripple on anything tappable
+  document.addEventListener('pointerdown', e => {
+    const el = e.target.closest('.btn, .li.tap, .chip, .tile, .seg button, .iconbtn, .pad button, #nav .ind, .fab, .dd, .ddlist button, .cartbar .sum, .bizswitch button, .qty button, .x');
+    if (!el || el.disabled) return;
+    const r = el.getBoundingClientRect(), d = Math.max(r.width, r.height);
+    const sp = document.createElement('span'); sp.className = 'ripple';
+    sp.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX - r.left - d / 2}px;top:${e.clientY - r.top - d / 2}px`;
+    if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+    el.appendChild(sp); setTimeout(() => sp.remove(), 600);
+  }, { passive: true });
+  window.addEventListener('scroll', () => { const t2 = document.getElementById('top'); if (t2) t2.classList.toggle('scrolled', window.scrollY > 4); }, { passive: true });
+  // "Install app": Android/desktop Chrome gives us a prompt; iPhone needs Share → Add to Home Screen.
+  let installEvt = null;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; });
+  window.addEventListener('appinstalled', () => { installEvt = null; toast(t('App installed'), 'ok'); });
+  const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  async function installApp() {
+    if (isStandalone()) return alertBox(t('Install the app'), `<p>${esc(t('The app is already installed on this phone. Open it from your home screen.'))}</p>`);
+    if (installEvt) { installEvt.prompt(); const c = await installEvt.userChoice; if (c.outcome === 'accepted') installEvt = null; return; }
+    const steps = isIOS()
+      ? [t('Open this page in Safari.'), t('Tap the Share button (square with an arrow).'), t('Choose "Add to Home Screen", then tap "Add".')]
+      : [t('Open this page in Chrome.'), t('Tap the menu ⋮ at the top right.'), t('Choose "Install app" or "Add to Home screen".')];
+    alertBox(t('Install the app'), `<ol style="padding-left:20px;font-size:16px;line-height:1.7">${steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>`);
+  }
+
   const input = (name, label, val, attrs) => `<label class="f"><span>${esc(label)}</span><input class="in" name="${name}" value="${esc(val == null ? '' : val)}" ${attrs || ''}></label>`;
   const moneyInput = (name, label, val, attrs) => input(name, label, val, 'inputmode="numeric" pattern="[0-9]*" ' + (attrs || ''));
   function beep(ok) {
@@ -607,7 +719,7 @@
 
   window.App = {
     S, LS, CFG, APP_VERSION, t, esc, num, fmt, money, usd, rate, roundStep, uid, today, addDays, when, localParts, bizName, methodName,
-    isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
+    icon, installApp, isStandalone, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
     toast, sheet, confirmBox, alertBox, withBusy, formData, seg, input, moneyInput, beep, go, render, drawShell, updateTop,
     startCamera, stopCamera, scanOnce, toCSV, download, parseCSV, readXLSX, makeDocPDF, shareFile, openWhatsApp, start
   };

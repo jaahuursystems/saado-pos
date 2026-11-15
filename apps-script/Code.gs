@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.0.0';
+var VERSION = '1.1.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -30,7 +30,9 @@ var SCHEMA = {
   Customers:  ['id', 'business', 'name', 'phone', 'balance', 'note', 'createdAt', 'active'],
   CustLedger: ['id', 'ts', 'date', 'business', 'customerId', 'type', 'amount', 'method', 'ref', 'shiftId', 'userName', 'note'],
   Suppliers:  ['id', 'business', 'name', 'phone', 'balance', 'note', 'createdAt', 'active'],
-  SupLedger:  ['id', 'ts', 'date', 'business', 'supplierId', 'type', 'amount', 'paid', 'method', 'items', 'userName', 'note'],
+  SupLedger:  ['id', 'ts', 'date', 'business', 'supplierId', 'type', 'amount', 'paid', 'method', 'items', 'userName', 'note', 'ref'],
+  PurchaseOrders: ['id', 'poNo', 'date', 'business', 'supplierId', 'supplierName', 'status', 'items', 'total', 'paid', 'terms', 'notes',
+                   'createdTs', 'createdBy', 'sentTs', 'receivedTs', 'receivedBy', 'cancelReason'],
   Expenses:   ['id', 'ts', 'date', 'business', 'category', 'amount', 'method', 'shiftId', 'ref', 'userName', 'note'],
   Refunds:    ['id', 'ts', 'date', 'business', 'saleId', 'items', 'amount', 'cost', 'method', 'reason', 'status', 'requestedBy', 'decidedBy', 'decidedTs', 'note', 'shiftId'],
   Ingredients:['id', 'name', 'unit', 'stock', 'lowLevel', 'cost', 'active', 'updatedAt'],
@@ -93,7 +95,7 @@ function out_(o) {
 }
 
 var PUBLIC = { ping: 1, names: 1, login: 1 };
-var READS = { boot: 1, report: 1, 'sales.list': 1, 'cust.ledger': 1, 'sup.ledger': 1, 'refund.list': 1, 'users.list': 1, 'audit.list': 1,
+var READS = { boot: 1, 'po.list': 1, report: 1, 'sales.list': 1, 'cust.ledger': 1, 'sup.ledger': 1, 'refund.list': 1, 'users.list': 1, 'audit.list': 1,
               'export': 1, 'shift.list': 1, 'ing.log': 1, 'exp.list': 1, 'stock.log': 1, logout: 1 };
 
 function handle_(req) {
@@ -566,9 +568,9 @@ var ACTIONS = {
     var paid = Math.min(Math.max(0, num_(d.paid)), total);
     var m = PAY_METHODS.indexOf(d.method) >= 0 ? d.method : 'cash';
     var id = d.id || uid_('PU');
-    s.balance = num_(s.balance) + total - paid; update_('Suppliers', s);
     insert_('SupLedger', { id: id, ts: now, date: today_(), business: s.business, supplierId: s.id, type: 'purchase', amount: total, paid: paid,
-                           method: m, items: desc, userName: u.name, note: str_(d.note) });
+                           method: m, items: desc, userName: u.name, note: str_(d.note), ref: '' });
+    supBalance_(s);
     if (paid > 0) addExpense_(u, s.business, supCat_(s), paid, m, id, 'Paid to ' + s.name);
     audit_(u, 'sup.purchase', { supplier: s.name, total: total, paid: paid });
     return { ok: true, supplier: clean_(s), total: total };
@@ -582,9 +584,9 @@ var ACTIONS = {
     var amt = num_(d.amount); if (amt <= 0) throw new Error('Enter an amount');
     var m = PAY_METHODS.indexOf(d.method) >= 0 ? d.method : 'cash';
     var id = d.id || uid_('SPY');
-    s.balance = num_(s.balance) - amt; update_('Suppliers', s);
     insert_('SupLedger', { id: id, ts: nowIso_(), date: today_(), business: s.business, supplierId: s.id, type: 'payment', amount: amt, paid: amt,
-                           method: m, items: '', userName: u.name, note: str_(d.note) });
+                           method: m, items: '', userName: u.name, note: str_(d.note), ref: '' });
+    supBalance_(s);
     addExpense_(u, s.business, supCat_(s), amt, m, id, 'Paid to ' + s.name);
     audit_(u, 'sup.pay', { supplier: s.name, amount: amt });
     return { ok: true, supplier: clean_(s) };
@@ -594,6 +596,88 @@ var ACTIONS = {
     need_(u, 'suppliers');
     var s = find_('Suppliers', d.supplierId); if (!s) throw new Error('Supplier not found');
     return { ok: true, supplier: clean_(s), ledger: table_('SupLedger').rows.filter(function (l) { return l.supplierId === s.id; }).reverse().map(clean_) };
+  },
+
+  /* ---------- purchase orders (like Adam Nokia): DRAFT -> SENT -> RECEIVED, or CANCELLED ----------
+     Stock goes up only when the order is RECEIVED. Payments can be made any time (now, part, or later on credit). */
+  'po.list': function (u, d) {
+    need_(u, 'suppliers');
+    var biz = bizFilter_(u, d.business);
+    return { ok: true, orders: table_('PurchaseOrders').rows.filter(function (o) { return biz.indexOf(o.business) >= 0 && (!d.supplierId || o.supplierId === d.supplierId); })
+                                 .slice(-300).reverse().map(clean_) };
+  },
+
+  'po.save': function (u, d) {
+    need_(u, 'suppliers');
+    var po = d.id ? find_('PurchaseOrders', d.id) : null;
+    if (po && d.isNew) return { ok: true, dup: true, order: clean_(po) };          // offline retry
+    if (po && ['DRAFT', 'SENT'].indexOf(po.status) < 0) throw new Error('Only draft or sent orders can be changed');
+    var s = find_('Suppliers', d.supplierId || (po && po.supplierId)); if (!s) throw new Error('Supplier not found');
+    needBiz_(u, s.business);
+    var items = [], total = 0;
+    (d.items || []).forEach(function (it) {
+      var q = num_(it.qty), c = Math.max(0, num_(it.cost)); if (q <= 0) return;
+      var ref = it.kind === 'i' ? find_('Ingredients', it.refId) : find_('Products', it.refId);
+      if (!ref || (it.kind !== 'i' && ref.business !== s.business)) throw new Error('Item not found: ' + (it.name || ''));
+      var name = it.kind === 'i' ? ref.name + ' (' + ref.unit + ')' : ref.name;
+      items.push({ kind: it.kind === 'i' ? 'i' : 'p', refId: ref.id, name: name, qty: q, cost: c });
+      total += q * c;
+    });
+    if (!items.length) throw new Error('Add at least one item');
+    var now = nowIso_();
+    if (!po) {
+      var prefix = s.business === 'food' ? 'FF-PO-' : 'SH-PO-';
+      var n = table_('PurchaseOrders').rows.filter(function (o) { return o.business === s.business; }).length + 1;
+      po = { id: d.id || uid_('PO'), poNo: prefix + ('000' + n).slice(-4), date: today_(), business: s.business, supplierId: s.id, supplierName: s.name, status: 'DRAFT',
+             items: items, total: total, paid: 0, terms: str_(d.terms, 80), notes: str_(d.notes, 300), createdTs: now, createdBy: u.name, sentTs: '', receivedTs: '', receivedBy: '', cancelReason: '' };
+      insert_('PurchaseOrders', po); audit_(u, 'po.create', { po: po.poNo, supplier: s.name, total: total });
+    } else {
+      if (num_(po.paid) > total) throw new Error('Paid amount is more than the new total');
+      po.supplierId = s.id; po.supplierName = s.name; po.items = items; po.total = total; po.terms = str_(d.terms, 80); po.notes = str_(d.notes, 300);
+      update_('PurchaseOrders', po); audit_(u, 'po.edit', { po: po.poNo, total: total });
+    }
+    if (d.markSent && po.status === 'DRAFT') { po.status = 'SENT'; po.sentTs = now; update_('PurchaseOrders', po); }
+    if (d.payNow > 0) payPo_(u, po, s, num_(d.payNow), d.payMethod, d.id ? d.id + '-PAY' : '');
+    if (d.receiveNow) receivePo_(u, po, s, null);
+    return { ok: true, order: clean_(po), supplier: clean_(s) };
+  },
+
+  'po.status': function (u, d) {
+    need_(u, 'suppliers');
+    var po = find_('PurchaseOrders', d.id); if (!po) throw new Error('Order not found');
+    needBiz_(u, po.business);
+    var to = d.status;
+    if (to === po.status) return { ok: true, dup: true, order: clean_(po) };
+    var flow = { DRAFT: ['SENT', 'CANCELLED'], SENT: ['CANCELLED', 'DRAFT'] };
+    if ((flow[po.status] || []).indexOf(to) < 0) throw new Error('This order cannot be changed now');
+    if (to === 'CANCELLED') {
+      if (num_(po.paid) > 0) throw new Error('This order has payments. It cannot be cancelled.');
+      po.cancelReason = str_(d.reason, 200);
+    }
+    if (to === 'SENT') po.sentTs = nowIso_();
+    po.status = to; update_('PurchaseOrders', po); audit_(u, 'po.' + to.toLowerCase(), po.poNo);
+    return { ok: true, order: clean_(po) };
+  },
+
+  'po.receive': function (u, d) {
+    need_(u, 'suppliers');
+    var po = find_('PurchaseOrders', d.id); if (!po) throw new Error('Order not found');
+    if (po.status === 'RECEIVED') return { ok: true, dup: true, order: clean_(po) };
+    needBiz_(u, po.business);
+    var s = find_('Suppliers', po.supplierId);
+    receivePo_(u, po, s, d.lines || null);
+    return { ok: true, order: clean_(po), supplier: s ? clean_(s) : null };
+  },
+
+  'po.pay': function (u, d) {
+    need_(u, 'suppliers');
+    if (d.payId && exists_('SupLedger', d.payId)) return { ok: true, dup: true };
+    var po = find_('PurchaseOrders', d.id); if (!po) throw new Error('Order not found');
+    needBiz_(u, po.business);
+    if (po.status === 'CANCELLED') throw new Error('This order is cancelled');
+    var s = find_('Suppliers', po.supplierId);
+    payPo_(u, po, s, num_(d.amount), d.method, d.payId);
+    return { ok: true, order: clean_(po), supplier: s ? clean_(s) : null };
   },
 
   /* ---------- expenses ---------- */
@@ -879,7 +963,7 @@ var ACTIONS = {
   'export': function (u, d) {
     need_(u, 'export');
     var biz = bizFilter_(u, d.business), from = d.from || today_(), to = d.to || today_();
-    var name = { sales: 'Sales', items: 'SaleItems', expenses: 'Expenses', shifts: 'Shifts', customers: 'Customers', products: 'Products', custledger: 'CustLedger', supledger: 'SupLedger', refunds: 'Refunds' }[d.type];
+    var name = { sales: 'Sales', items: 'SaleItems', expenses: 'Expenses', shifts: 'Shifts', customers: 'Customers', products: 'Products', custledger: 'CustLedger', supledger: 'SupLedger', refunds: 'Refunds', orders: 'PurchaseOrders' }[d.type];
     if (!name) throw new Error('Unknown export');
     var t = table_(name), headers = t.headers.filter(function (h) { return h !== 'pinHash' && h !== 'salt' && (h !== 'cost' || can_(u, 'viewProfit')); });
     var rows = t.rows.filter(function (r) {
@@ -938,6 +1022,61 @@ function bizFilter_(u, b) {
 }
 
 function supCat_(s) { return s.business === 'food' ? 'Ingredients' : 'Supplier purchases'; }
+
+// What we owe a supplier = goods received - payments. Negative = we paid a deposit before delivery.
+function supBalance_(s) {
+  var bal = 0;
+  table_('SupLedger').rows.forEach(function (l) {
+    if (l.supplierId !== s.id) return;
+    if (l.type === 'purchase') bal += num_(l.amount) - num_(l.paid);
+    else if (l.type === 'receipt') bal += num_(l.amount);
+    else if (l.type === 'payment') bal -= num_(l.amount);
+  });
+  s.balance = bal; update_('Suppliers', s);
+  return bal;
+}
+
+function payPo_(u, po, s, amount, method, payId) {
+  var left = num_(po.total) - num_(po.paid);
+  if (!(amount > 0)) throw new Error('Enter an amount');
+  if (left <= 0) throw new Error('This order is already fully paid');
+  amount = Math.min(amount, left);
+  var m = PAY_METHODS.indexOf(method) >= 0 ? method : 'cash', id = payId || uid_('SPY');
+  insert_('SupLedger', { id: id, ts: nowIso_(), date: today_(), business: po.business, supplierId: po.supplierId, type: 'payment', amount: amount, paid: amount,
+                         method: m, items: '', userName: u.name, note: po.poNo, ref: po.id });
+  po.paid = num_(po.paid) + amount; update_('PurchaseOrders', po);
+  addExpense_(u, po.business, s ? supCat_(s) : 'Supplier purchases', amount, m, id, 'Paid to ' + po.supplierName + ' (' + po.poNo + ')');
+  if (s) supBalance_(s);
+  audit_(u, 'po.pay', { po: po.poNo, amount: amount, method: m });
+}
+
+function receivePo_(u, po, s, lines) {
+  if (['DRAFT', 'SENT'].indexOf(po.status) < 0) throw new Error('Only open orders can be received');
+  var items = typeof po.items === 'string' ? JSON.parse(po.items || '[]') : po.items, now = nowIso_(), total = 0;
+  items.forEach(function (it, i) {
+    var l = lines && lines[i] ? lines[i] : null;
+    if (l) { it.qty = Math.max(0, num_(l.qty)); it.cost = Math.max(0, num_(l.cost)); }
+    total += num_(it.qty) * num_(it.cost);
+    if (!(num_(it.qty) > 0)) return;
+    if (it.kind === 'i') {
+      var g = find_('Ingredients', it.refId); if (!g) return;
+      g.stock = num_(g.stock) + num_(it.qty); if (num_(it.cost) > 0) g.cost = num_(it.cost); g.updatedAt = now; update_('Ingredients', g);
+      insert_('IngLog', { id: uid_('IL'), ts: now, date: today_(), ingredientId: g.id, name: g.name, type: 'purchase', qty: num_(it.qty), userName: u.name, note: po.poNo });
+    } else {
+      var p = find_('Products', it.refId); if (!p) return;
+      var before = num_(p.stock); if (p.business === 'shop') p.stock = before + num_(it.qty);
+      if (num_(it.cost) > 0) p.cost = num_(it.cost); p.updatedAt = now; update_('Products', p);
+      if (p.business === 'shop') insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'purchase',
+                                   before: before, after: p.stock, diff: num_(it.qty), userName: u.name, note: po.poNo });
+    }
+  });
+  if (num_(po.paid) > total) throw new Error('Paid amount is more than the received total');
+  po.items = items; po.total = total; po.status = 'RECEIVED'; po.receivedTs = now; po.receivedBy = u.name; update_('PurchaseOrders', po);
+  insert_('SupLedger', { id: uid_('SR'), ts: now, date: today_(), business: po.business, supplierId: po.supplierId, type: 'receipt', amount: total, paid: 0,
+                         method: '', items: items, userName: u.name, note: po.poNo, ref: po.id });
+  if (s) supBalance_(s);
+  audit_(u, 'po.receive', { po: po.poNo, total: total });
+}
 
 function addExpense_(u, biz, cat, amt, method, ref, note, id) {
   var shift = openShift_(u, biz);
@@ -1039,6 +1178,7 @@ function report_(u, d) {
     lowStock: lowStock, lowIngredients: lowIng, expiring: expiring, debts: debts, totalDebt: debts.reduce(function (a, c) { return a + c.balance; }, 0),
     suppliersOwed: supOwed, balances: balances, shifts: shifts,
     pendingRefunds: table_('Refunds').rows.filter(function (r) { return r.status === 'pending' && biz.indexOf(r.business) >= 0; }).length,
+    openOrders: table_('PurchaseOrders').rows.filter(function (o) { return o.status === 'SENT' && biz.indexOf(o.business) >= 0; }).length,
     profitVisible: profitOk
   };
 }
@@ -1078,7 +1218,7 @@ function setup() {
   }
   var shown = [];
   if (!table_('Users').rows.length) {
-    [['Zakariye', 'owner', 'both'], ['Hussein', 'owner', 'both'], ['Raxma', 'employee', 'shop'], ['Sacad', 'employee', 'food']].forEach(function (x) {
+    [['Hussein', 'owner', 'both'], ['Raxma', 'employee', 'shop'], ['Sacad', 'employee', 'food']].forEach(function (x) {
       var pin = randomPin_(), salt = newSalt_();
       insert_('Users', { id: uid_('U'), name: x[0], role: x[1], business: x[2], pinHash: hash_(salt, pin), salt: salt, active: 1, lang: 'so',
                          afterHours: x[1] === 'owner' ? 1 : 0, perms: JSON.stringify(x[1] === 'owner' ? [] : EMPLOYEE_DEFAULT_PERMS), createdAt: nowIso_(), pinChanged: 0 });

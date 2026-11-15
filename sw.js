@@ -1,7 +1,7 @@
 /* Saado POS — service worker: keeps the app working offline.
    IMPORTANT: change VERSION on every release so phones download the new files. */
-const VERSION = 'saado-v1.0.0';
-const SHELL = ['./', 'index.html', 'app.css?v=1.0.0', 'config.js?v=1.0.0', 'i18n.js?v=1.0.0', 'app.js?v=1.0.0', 'screens.js?v=1.0.0', 'guide.html',
+const VERSION = 'saado-v1.1.0';
+const SHELL = ['./', 'index.html', 'app.css?v=1.1.0', 'config.js?v=1.1.0', 'i18n.js?v=1.1.0', 'guide.js?v=1.1.0', 'app.js?v=1.1.0', 'screens.js?v=1.1.0',
   'manifest.json', 'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/favicon.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,7 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;                       // server calls (POST) always go to the network
   const url = new URL(req.url);
-  if (url.hostname === 'cdn.jsdelivr.net') {             // iPhone barcode library: keep a copy for offline use
+  if (url.hostname === 'cdn.jsdelivr.net' || /fonts\.(googleapis|gstatic)\.com$/.test(url.hostname)) {   // scanner library + Inter font: keep a copy for offline use
     e.respondWith(caches.open('saado-cdn').then(c => c.match(req).then(hit => hit || fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; }))));
     return;
   }

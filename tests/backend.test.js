@@ -16,11 +16,11 @@ const id = n => names.find(u => u.name === n).id;
 const login = n => env.call('login', { userId: id(n), pin: pins[n] });
 
 console.log('Saado POS backend tests');
-t('setup made 4 users with 4-digit PINs, safe to run twice', () => {
-  assert.strictEqual(Object.keys(pins).length, 4);
+t('setup made 3 users (Hussein owner) with 4-digit PINs, safe to run twice', () => {
+  assert.strictEqual(Object.keys(pins).length, 3); assert.ok(!('Zakariye' in pins));
   Object.values(pins).forEach(p => assert.ok(/^\d{4}$/.test(p) && !/^(\d)\1+$/.test(p)));
   env.ctx.setup();
-  assert.strictEqual(env.call('names').users.length, 4);
+  assert.strictEqual(env.call('names').users.length, 3);
   assert.ok(env.sheets.Settings.getLastRow() > 10);
 });
 t('names is public; everything else needs a token', () => {
@@ -29,14 +29,14 @@ t('names is public; everything else needs a token', () => {
 });
 let Z, R, S;
 t('owner login works and sees both businesses', () => {
-  Z = login('Zakariye'); assert.ok(Z.ok, Z.error); assert.ok(Z.token);
+  Z = login('Hussein'); assert.ok(Z.ok, Z.error); assert.ok(Z.token);
   assert.strictEqual(Z.user.role, 'owner'); assert.ok(Z.user.perms.includes('viewProfit'));
 });
 t('wrong PIN locks after 5 tries', () => {
-  for (let i = 0; i < 4; i++) assert.ok(/Wrong PIN/.test(env.call('login', { userId: id('Hussein'), pin: '0000' }).error));
-  assert.ok(/LOCKED/.test(env.call('login', { userId: id('Hussein'), pin: '0000' }).error));
-  assert.ok(/LOCKED/.test(env.call('login', { userId: id('Hussein'), pin: pins.Hussein }).error));
-  env.cache.clear(); Z = login('Zakariye');
+  for (let i = 0; i < 4; i++) assert.ok(/Wrong PIN/.test(env.call('login', { userId: id('Sacad'), pin: '0000' }).error));
+  assert.ok(/LOCKED/.test(env.call('login', { userId: id('Sacad'), pin: '0000' }).error));
+  assert.ok(/LOCKED/.test(env.call('login', { userId: id('Sacad'), pin: pins.Sacad }).error));
+  env.cache.clear(); Z = login('Hussein');
 });
 let rice, cola, chicken;
 t('owner adds products (shop with stock, food without)', () => {
@@ -142,6 +142,31 @@ t('supplier purchase adds stock, updates cost, unpaid part owed, paid part is ex
   assert.strictEqual(pay.supplier.balance, 100000);
   assert.strictEqual(env.sheets.Expenses.data.filter(r => r[4] === 'Supplier purchases').length, 2);
 });
+t('purchase order: draft on credit -> sent -> part paid -> received adds stock, owed = received - paid', () => {
+  const sp = env.call('sup.save', { business: 'shop', name: 'Shirkada Cadaani', phone: '252634111111' }, Z.token).supplier;
+  const before = env.call('boot', {}, Z.token).products.find(p => p.id === cola.id).stock;
+  const c = env.call('po.save', { id: 'PO1', isNew: 1, supplierId: sp.id, items: [{ kind: 'p', refId: cola.id, qty: 24, cost: 2400 }], terms: 'Credit 30 days', markSent: 1 }, Z.token);
+  assert.ok(c.ok, c.error); assert.strictEqual(c.order.poNo, 'SH-PO-0001'); assert.strictEqual(c.order.status, 'SENT'); assert.strictEqual(c.order.total, 57600);
+  assert.strictEqual(env.call('boot', {}, Z.token).products.find(p => p.id === cola.id).stock, before, 'stock must not change before receiving');
+  assert.ok(env.call('po.save', { id: 'PO1', isNew: 1, supplierId: sp.id, items: [] }, Z.token).dup, 'offline retry is not duplicated');
+  const p1 = env.call('po.pay', { id: 'PO1', payId: 'PP1', amount: 20000, method: 'zaad' }, Z.token);
+  assert.strictEqual(p1.order.paid, 20000); assert.strictEqual(p1.supplier.balance, -20000);
+  assert.ok(env.call('po.pay', { id: 'PO1', payId: 'PP1', amount: 20000, method: 'zaad' }, Z.token).dup);
+  assert.ok(/payments/.test(env.call('po.status', { id: 'PO1', status: 'CANCELLED', reason: 'x' }, Z.token).error));
+  const r = env.call('po.receive', { id: 'PO1', lines: [{ qty: 24, cost: 2500 }] }, Z.token);
+  assert.strictEqual(r.order.status, 'RECEIVED'); assert.strictEqual(r.order.total, 60000); assert.strictEqual(r.supplier.balance, 40000);
+  const b = env.call('boot', {}, Z.token).products.find(p => p.id === cola.id);
+  assert.strictEqual(b.stock, before + 24); assert.strictEqual(b.cost, 2500);
+  const p2 = env.call('po.pay', { id: 'PO1', payId: 'PP2', amount: 99999, method: 'cash' }, Z.token);
+  assert.strictEqual(p2.order.paid, 60000); assert.strictEqual(p2.supplier.balance, 0);
+  assert.ok(/fully paid/.test(env.call('po.pay', { id: 'PO1', amount: 1, method: 'cash' }, Z.token).error));
+  const q = env.call('po.save', { id: 'PO2', isNew: 1, supplierId: sp.id, items: [{ kind: 'p', refId: rice.id, qty: 2, cost: 46000 }], payNow: 92000, payMethod: 'cash', receiveNow: 1 }, Z.token);
+  assert.strictEqual(q.order.status, 'RECEIVED'); assert.strictEqual(q.supplier.balance, 0);
+  const d = env.call('po.save', { id: 'PO3', isNew: 1, supplierId: sp.id, items: [{ kind: 'p', refId: rice.id, qty: 1, cost: 1 }] }, Z.token);
+  assert.strictEqual(env.call('po.status', { id: 'PO3', status: 'CANCELLED', reason: 'mistake' }, Z.token).order.status, 'CANCELLED');
+  assert.strictEqual(env.call('po.list', { business: 'shop' }, Z.token).orders.length, 3);
+  assert.ok(/NOPERM/.test(env.call('po.list', {}, R.token).error), 'employee without suppliers permission');
+});
 t('Fast Food: Sacad sells meals at 18:00, uses ingredients, low warning', () => {
   env.setNow('2026-11-15T15:00:00Z'); // 18:00
   S = login('Sacad'); assert.ok(S.ok, S.error);
@@ -183,7 +208,7 @@ t('users: owner adds user with generated PIN, user changes PIN, reset PIN', () =
   assert.ok(env.call('me.changePin', { oldPin: a.pin, newPin: '58213' }, L.token).ok);
   assert.ok(env.call('login', { userId: a.user.id, pin: '58213' }).ok);
   const rp = env.call('users.resetPin', { id: a.user.id }, Z.token); assert.ok(env.call('login', { userId: a.user.id, pin: rp.pin }).ok);
-  assert.ok(/at least one|own owner/.test(env.call('users.save', { id: id('Zakariye'), name: 'Zakariye', role: 'employee' }, Z.token).error));
+  assert.ok(/at least one|own owner/.test(env.call('users.save', { id: id('Hussein'), name: 'Hussein', role: 'employee' }, Z.token).error));
   const dis = env.call('users.save', { id: a.user.id, name: 'Hodan', role: 'employee', business: 'shop', active: 0 }, Z.token);
   assert.strictEqual(dis.user.active, false);
   assert.ok(/disabled/.test(env.call('login', { userId: a.user.id, pin: rp.pin }).error));
@@ -199,7 +224,7 @@ t('import products: updates by barcode, adds new, skips bad rows', () => {
 });
 t('stock count fixes stock and logs difference', () => {
   const r = env.call('stock.count', { id: 'SC1', counts: [{ productId: cola.id, counted: 40 }] }, Z.token);
-  assert.strictEqual(r.changed, 1); assert.strictEqual(r.logs[0].before, 46);
+  assert.strictEqual(r.changed, 1); assert.strictEqual(r.logs[0].before, 70);
 });
 t('export and audit', () => {
   const e = env.call('export', { type: 'sales', from: '2026-11-15', to: '2026-11-16' }, Z.token);

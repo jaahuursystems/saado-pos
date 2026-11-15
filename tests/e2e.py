@@ -19,8 +19,8 @@ def step(name):
 
 def login(page, name):
     page.goto(BASE + '/')
-    page.wait_for_selector('.names button')
-    page.click(f'.names button:has-text("{name}")')
+    page.wait_for_selector('#dd')
+    page.click('#dd'); page.click(f'.ddlist button:has-text("{name}")')
     for d in pins[name]:
         page.click(f'.pad button[data-k="{d}"]')
     page.click('.pad button.go')
@@ -40,29 +40,34 @@ with sync_playwright() as p:
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' and 'favicon' not in m.text else None)
 
     # ---------- owner sets up ----------
-    page.goto(BASE + '/'); page.wait_for_selector('.names button')
-    page.screenshot(path=SHOTS + '01-login.png'); step('login screen shows names')
-    page.click('.names button:has-text("Zakariye")')
+    page.goto(BASE + '/'); page.wait_for_selector('#dd'); page.wait_for_timeout(400)
+    page.screenshot(path=SHOTS + '01-login.png')
+    page.click('#dd'); page.wait_for_selector('.ddlist button'); page.screenshot(path=SHOTS + '01b-login-dd.png')
+    names = page.locator('.ddlist button').all_inner_texts(); assert names == ['Hussein', 'Raxma', 'Sacad'], names
+    step('login: name dropdown (Hussein, Raxma, Sacad — no Zakariye)')
+    page.click('.ddlist button:has-text("Hussein")')
     for d in '0000': page.click(f'.pad button[data-k="{d}"]')
     page.click('.pad button.go'); page.wait_for_selector('#lgerr:has-text("PIN")'); step('wrong PIN is refused with a clear message')
-    login(page, 'Zakariye'); page.wait_for_selector('#dash .card'); page.wait_for_timeout(600)
+    login(page, 'Hussein'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(600)
     page.screenshot(path=SHOTS + '02-home.png'); step('owner logs in to dashboard')
 
-    page.click('#nav [data-r="more"]'); page.click('.menu-grid [data-r="products"]')
+    page.click('#nav [data-r="more"]'); page.wait_for_selector('.list [data-r="products"]')
+    assert page.locator('[data-r="export"]').count() == 0; page.screenshot(path=SHOTS + '02b-more.png'); step('More menu has no Export')
+    page.click('.list [data-r="products"]')
     for name, code, price, cost, stock in [('Coca-Cola 330ml', '5449000000996', '3200', '2500', '48'), ('Bariis 5kg', '6001234567890', '52000', '45000', '4'), ('Colgate 100ml', '8714789', '4500', '3500', '12')]:
-        page.click('#np'); page.fill('[name=name]', name); page.fill('[name=barcode]', code); page.fill('[name=price]', price); page.fill('[name=cost]', cost); page.fill('[name=stock]', stock)
+        page.click('.fab'); page.fill('[name=name]', name); page.fill('[name=barcode]', code); page.fill('[name=price]', price); page.fill('[name=cost]', cost); page.fill('[name=stock]', stock)
         page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")')
     page.screenshot(path=SHOTS + '03-products.png'); step('owner adds 3 shop products')
     page.click('.bizswitch button[data-b="food"]'); page.wait_for_timeout(300)
-    page.goto(BASE + '/#products'); page.wait_for_selector('#np')
+    page.goto(BASE + '/#products'); page.wait_for_selector('.fab')
     for name, price, cost in [('Digaag buuxa', '60000', '35000'), ('Chips', '15000', '6000'), ('Shawarma', '25000', '12000')]:
-        page.click('#np'); page.fill('[name=name]', name); page.fill('[name=price]', price); page.fill('[name=cost]', cost)
+        page.click('.fab'); page.fill('[name=name]', name); page.fill('[name=price]', price); page.fill('[name=cost]', cost)
         page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")')
     step('owner adds 3 fast food menu items')
     page.click('.bizswitch button[data-b="shop"]')
 
     page.goto(BASE + '/#users'); page.wait_for_selector('#ul .li')
-    page.click('#nu'); page.fill('[name=name]', 'Hodan'); page.click('.ft .btn.gold')
+    page.wait_for_selector('.fab'); page.click('.fab'); page.fill('[name=name]', 'Hodan'); page.click('.ft .btn.gold')
     page.wait_for_selector('.sheet:has-text("Hodan") .t'); new_pin = page.inner_text('.sheet .t').strip()
     assert len(new_pin) == 4, new_pin
     page.screenshot(path=SHOTS + '04-newpin.png'); page.click('.ft .btn.primary'); step('owner creates a user and sees the new PIN once')
@@ -158,23 +163,45 @@ with sync_playwright() as p:
     logout(page)
 
     # ---------- owner approves + reports ----------
-    login(page, 'Hussein'); page.wait_for_selector('#dash .navy'); page.wait_for_timeout(500)
+    login(page, 'Hussein'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(500)
     page.screenshot(path=SHOTS + '13-home-owner.png', full_page=True)
     page.goto(BASE + '/#refunds'); page.wait_for_selector('[data-act="1"]'); page.click('[data-act="1"]'); page.click('.ov .ft .btn.primary')
     page.wait_for_selector('.toast.ok'); assert sheet('Refunds')[0][10] == 'approved'; step('owner approves the refund')
     page.goto(BASE + '/#reports'); page.wait_for_selector('#rep .card h3'); page.wait_for_timeout(300)
     txt = page.inner_text('#rep'); assert 'Edahab' in txt
     page.screenshot(path=SHOTS + '14-reports.png', full_page=True); step('reports: combined Shop + Fast Food')
-    page.goto(BASE + '/#more'); page.click('.menu-grid [data-r="lang"]'); page.wait_for_selector('#nav:has-text("Sell")')
+    page.goto(BASE + '/#more'); page.click('.list [data-r="lang"]'); page.wait_for_selector('#nav:has-text("Sell")')
     page.screenshot(path=SHOTS + '15-english.png'); step('language switch to English')
+    # ---------- purchasing: new order on credit -> received -> paid ----------
+    page.set_viewport_size({'width': 393, 'height': 851})
+    page.goto(BASE + '/#purchasing'); page.wait_for_selector('.fab'); page.wait_for_timeout(300)
+    page.click('.fab'); page.wait_for_selector('.sheet [name=name]')
+    page.fill('.sheet [name=name]', 'Shirkada Cadaani'); page.fill('.sheet [name=phone]', '252634111111'); page.click('.ov .ft .btn.gold')
+    page.wait_for_selector('#sp'); page.fill('#iq', 'Coca'); page.click('#ir .li'); page.fill('#il [data-k=qty]', '24'); page.fill('#il [data-k=cost]', '2400')
+    page.wait_for_selector('#tot:has-text("57,600")'); page.screenshot(path=SHOTS + '17-po-new.png')
+    page.click('.ov .ft .btn.ghost'); page.wait_for_selector('.sheet [data-a=receive]')
+    page.wait_for_selector('.sheet .hd:has-text("SH-PO-0001")'); page.wait_for_timeout(300); page.screenshot(path=SHOTS + '18-po-sheet.png'); step('new purchase order on credit (draft), number SH-PO-0001')
+    before = int(json.load(urllib.request.urlopen(BASE + '/__sheet?name=Products'))[1][7])
+    page.click('.sheet [data-a=receive]'); page.wait_for_selector('.ov .ft .btn.gold:has-text("stock"), .ov .ft .btn.gold'); page.click('.ov .ft .btn.gold')
+    page.wait_for_selector('.sheet .pill.green'); after = int(json.load(urllib.request.urlopen(BASE + '/__sheet?name=Products'))[1][7])
+    assert after == before + 24, (before, after); step('goods received: stock +24')
+    page.click('.sheet [data-a=pay]'); page.fill('[name=amount]', '20000'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.sheet:has-text("37,600")')
+    sup = sheet('Suppliers'); assert sup[0][4] in (37600, '37600'), sup; step('part payment: we owe supplier 37,600')
+    page.goto(BASE + '/#purchasing/suppliers'); page.wait_for_selector('#pbody .li'); page.wait_for_timeout(300); page.screenshot(path=SHOTS + '19-suppliers.png')
+    page.goto(BASE + '/#purchasing'); page.wait_for_selector('#pf .chip[data-v=all]'); page.click('#pf .chip[data-v=all]'); page.wait_for_timeout(200); page.screenshot(path=SHOTS + '20-orders.png')
+    # ---------- guide in-app, install button ----------
+    page.goto(BASE + '/#guide'); page.wait_for_selector('.guide h4'); page.screenshot(path=SHOTS + '21-guide.png')
+    page.click('#gt button[data-v=owner]'); page.wait_for_selector('.guide:has-text("Purchasing")'); step('guide is an in-app page (staff + owner)')
+    page.goto(BASE + '/#settings'); page.click('#inst'); page.wait_for_selector('.sheet:has-text("Chrome")'); page.screenshot(path=SHOTS + '22-install.png'); page.click('.ov .ft .btn')
+    step('settings: install-app button')
     page.goto(BASE + '/#stockcount'); page.wait_for_selector('#q'); page.fill('#q', 'Coca'); page.click('#res .li'); page.fill('[name=n]', '40'); page.click('.ov .ft .btn.gold')
     page.click('#sv'); page.wait_for_selector('.sheet:has-text("1 products corrected")'); step('stock count corrects stock')
-    page.set_viewport_size({'width': 1280, 'height': 900}); page.goto(BASE + '/#home'); page.wait_for_selector('#dash .navy'); page.wait_for_timeout(400)
+    page.set_viewport_size({'width': 1280, 'height': 900}); page.goto(BASE + '/#home'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(400)
     page.screenshot(path=SHOTS + '16-laptop.png'); step('laptop layout')
 
     b.close()
 
-bad = [e for e in errors if 'Failed to fetch' not in e and 'ERR_INTERNET_DISCONNECTED' not in e]
+bad = [e for e in errors if 'Failed to fetch' not in e and 'ERR_INTERNET_DISCONNECTED' not in e and 'ERR_TUNNEL_CONNECTION_FAILED' not in e]
 print('console errors:', bad if bad else 'none')
 print(len(results), 'steps passed')
 sys.exit(1 if bad else 0)
