@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!-- Saado POS — app page. Loads config.js (script address), i18n.js (Somali words), app.js (core) and screens.js. -->
+<html lang="so">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#003366">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Saado POS">
+<title>Saado POS</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="app.css?v=1.0.0">
+</head>
+<body>
+<header id="top" class="hidden"></header>
+<main id="main"><div style="text-align:center;padding:40px"><img src="icons/logo.png" alt="Saado" style="width:240px"><p>Loading…</p></div></main>
+<nav id="nav" class="hidden"></nav>
+<div id="toasts"></div>
+<noscript>Saado POS needs JavaScript.</noscript>
+<script src="config.js?v=1.0.0"></script>
+<script src="i18n.js?v=1.0.0"></script>
+<script src="app.js?v=1.0.0"></script>
+<script src="screens.js?v=1.0.0"></script>
+</body>
+</html>

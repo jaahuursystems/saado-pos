@@ -1,0 +1,180 @@
+"""
+End-to-end test in a real headless Chrome on a phone-sized screen, against tests/server.js.
+Covers: login, products, a sale online, a sale OFFLINE then sync (no duplicates), credit customer + payment,
+shift start/end, refund request + owner approval, reports, ingredients, users, settings, language switch.
+Run: node tests/server.js 8787 &  then  python3 tests/e2e.py
+"""
+import json, sys, time, urllib.request
+from playwright.sync_api import sync_playwright, expect
+
+BASE = 'http://localhost:8787'
+SHOTS = '/tmp/shots/'
+pins = json.load(urllib.request.urlopen(BASE + '/__pins'))
+urllib.request.urlopen(BASE + '/__time?t=2026-11-15T15:00:00Z')  # 18:00 in Hargeisa: both businesses open
+sheet = lambda n: [r for r in json.load(urllib.request.urlopen(BASE + '/__sheet?name=' + n))[1:] if r and r[0]]
+errors, results = [], []
+
+def step(name):
+    results.append(name); print('  ok ', name, flush=True)
+
+def login(page, name):
+    page.goto(BASE + '/')
+    page.wait_for_selector('.names button')
+    page.click(f'.names button:has-text("{name}")')
+    for d in pins[name]:
+        page.click(f'.pad button[data-k="{d}"]')
+    page.click('.pad button.go')
+    page.wait_for_selector('#nav:not(.hidden)', timeout=8000)
+
+def logout(page):
+    page.evaluate("localStorage.removeItem('saado_session')")
+
+def toast_has(page, text):
+    page.wait_for_selector(f'.toast:has-text("{text}")', timeout=6000)
+
+with sync_playwright() as p:
+    b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox'])
+    ctx = b.new_context(viewport={'width': 393, 'height': 851}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = ctx.new_page()
+    page.on('pageerror', lambda e: errors.append(str(e)))
+    page.on('console', lambda m: errors.append(m.text) if m.type == 'error' and 'favicon' not in m.text else None)
+
+    # ---------- owner sets up ----------
+    page.goto(BASE + '/'); page.wait_for_selector('.names button')
+    page.screenshot(path=SHOTS + '01-login.png'); step('login screen shows names')
+    page.click('.names button:has-text("Zakariye")')
+    for d in '0000': page.click(f'.pad button[data-k="{d}"]')
+    page.click('.pad button.go'); page.wait_for_selector('#lgerr:has-text("PIN")'); step('wrong PIN is refused with a clear message')
+    login(page, 'Zakariye'); page.wait_for_selector('#dash .card'); page.wait_for_timeout(600)
+    page.screenshot(path=SHOTS + '02-home.png'); step('owner logs in to dashboard')
+
+    page.click('#nav [data-r="more"]'); page.click('.menu-grid [data-r="products"]')
+    for name, code, price, cost, stock in [('Coca-Cola 330ml', '5449000000996', '3200', '2500', '48'), ('Bariis 5kg', '6001234567890', '52000', '45000', '4'), ('Colgate 100ml', '8714789', '4500', '3500', '12')]:
+        page.click('#np'); page.fill('[name=name]', name); page.fill('[name=barcode]', code); page.fill('[name=price]', price); page.fill('[name=cost]', cost); page.fill('[name=stock]', stock)
+        page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")')
+    page.screenshot(path=SHOTS + '03-products.png'); step('owner adds 3 shop products')
+    page.click('.bizswitch button[data-b="food"]'); page.wait_for_timeout(300)
+    page.goto(BASE + '/#products'); page.wait_for_selector('#np')
+    for name, price, cost in [('Digaag buuxa', '60000', '35000'), ('Chips', '15000', '6000'), ('Shawarma', '25000', '12000')]:
+        page.click('#np'); page.fill('[name=name]', name); page.fill('[name=price]', price); page.fill('[name=cost]', cost)
+        page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")')
+    step('owner adds 3 fast food menu items')
+    page.click('.bizswitch button[data-b="shop"]')
+
+    page.goto(BASE + '/#users'); page.wait_for_selector('#ul .li')
+    page.click('#nu'); page.fill('[name=name]', 'Hodan'); page.click('.ft .btn.gold')
+    page.wait_for_selector('.sheet:has-text("Hodan") .t'); new_pin = page.inner_text('.sheet .t').strip()
+    assert len(new_pin) == 4, new_pin
+    page.screenshot(path=SHOTS + '04-newpin.png'); page.click('.ft .btn.primary'); step('owner creates a user and sees the new PIN once')
+
+    page.goto(BASE + '/#settings'); page.wait_for_selector('[name=usdRate]')
+    page.fill('[name=ownerWhatsApp]', '252634000000')
+    page.fill('#otn', 'Delivery'); page.click('#ota')
+    page.click('#f button.gold.lg'); page.wait_for_selector('.toast.ok'); step('owner saves settings (+ order type)')
+    logout(page)
+
+    # ---------- Raxma, shop employee ----------
+    login(page, 'Raxma'); page.wait_for_selector('#q')
+    assert page.locator('.bizswitch').count() == 0
+    assert page.locator('#goShift').count() == 1; step('employee sees only her business and is asked to start a shift')
+    page.click('#goShift'); page.fill('[name=openCash]', '100000'); page.fill('[name=openZaadSH]', '20000'); page.click('#of button')
+    page.wait_for_selector('#q'); page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000); step('shift started')
+
+    page.click('.tile:has-text("Coca-Cola")'); page.click('.tile:has-text("Coca-Cola")'); page.click('.tile:has-text("Bariis")')
+    page.wait_for_selector('.cartbar'); assert '58,500' in page.inner_text('.cartbar .sum'), page.inner_text('.cartbar .sum')
+    page.screenshot(path=SHOTS + '05-cart.png'); step('tap tiles: 2 cola + rice = 58,400 → rounded 58,500')
+    page.click('#payBtn'); page.wait_for_selector('#tend')
+    page.click('#cur button[data-v="USD"]'); page.click('#quick .chip:has-text("$5")')
+    assert '750' in page.inner_text('#chg'), page.inner_text('#chg')   # 5*11850-58500 = 750 → "Baaqi: 750 SH"
+    page.screenshot(path=SHOTS + '06-pay.png')
+    page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok'); step('cash sale paid in USD, change shown in SH')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    assert len(sheet('Sales')) == 1; step('sale reached the Sheet')
+
+    # barcode typed / USB scanner: type code + Enter adds item
+    page.fill('#q', '8714789'); page.press('#q', 'Enter'); page.wait_for_selector('.cartbar'); step('typed barcode + Enter adds item (USB scanner / manual)')
+
+    # ---------- offline sale ----------
+    ctx.set_offline(True); page.evaluate("window.dispatchEvent(new Event('offline'))")
+    page.click('#payBtn'); page.click('[data-name=method] button[data-v="zaad"]'); page.wait_for_selector('.acct:has-text("436908")')
+    page.screenshot(path=SHOTS + '07-zaad.png')
+    page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_timeout(500)
+    q = page.evaluate("JSON.parse(localStorage.getItem('saado_queue')||'[]').length"); assert q == 1, q
+    page.screenshot(path=SHOTS + '08-offline.png'); step('OFFLINE: Zaad sale saved on the phone (shows account 436908)')
+    ctx.set_offline(False); page.evaluate("window.dispatchEvent(new Event('online'))")
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=10000)
+    assert len(sheet('Sales')) == 2; step('back online: offline sale synced automatically')
+    # resend the same sale id → must not duplicate
+    page.evaluate("""() => { const s = JSON.parse(localStorage.getItem('saado_data_' + App.S.user.id)); }""")
+    r = page.evaluate("""async () => { const r = await App.api('sync', {ops:[{qid:'x', action:'sale.create', data:{id: App.S.lastSale.id, business:'shop', method:'zaad', items: App.S.lastSale.items}}]}); return r.results[0].result.dup }""")
+    assert r is True and len(sheet('Sales')) == 2; step('retrying the same sale does not create a duplicate')
+
+    # ---------- credit customer ----------
+    page.click('.tile:has-text("Bariis")'); page.click('#payBtn'); page.click('[data-name=method] button[data-v="credit"]')
+    page.click('#newc'); page.fill('.ov:last-child [name=name]', 'Cali Xasan'); page.fill('.ov:last-child [name=phone]', '0634000001'); page.click('.ov:last-child .ft .btn.gold')
+    page.wait_for_selector('#clist .li:has-text("Cali")'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    cust = sheet('Customers'); assert cust[0][4] in (52000, '52000'), cust; step('new customer created from the pay screen + credit sale (balance 52,000)')
+    page.click('#nav [data-r="customers"]'); page.click('#cl .li'); page.click('#pay')
+    page.fill('[name=amount]', '20000'); page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    assert sheet('Customers')[0][4] in (32000, '32000'); page.screenshot(path=SHOTS + '09-customers.png'); step('partial debt payment (balance 32,000)')
+
+    # expense
+    page.goto(BASE + '/#expenses'); page.click('[data-name=category] button[data-v="Deliveries"]'); page.fill('[name=amount]', '5000'); page.click('#f button.gold')
+    page.wait_for_selector('.toast.ok'); step('cash expense recorded')
+
+    # ---------- refund request ----------
+    page.goto(BASE + '/#refunds'); page.click('#req'); page.wait_for_selector('#sl .li')
+    page.click('#sl .li:has-text("Bariis")'); page.fill('[name=reason]', 'Kiishku wuu jeexnaa')
+    page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok'); step('employee requests a refund with a reason')
+    perm = page.evaluate("""async () => { try { await App.api('refund.decide', {id: 'x', approve: true}); return 'allowed' } catch (e) { return e.message } }""")
+    assert 'permission' in perm.lower() or 'oggolaansho' in perm.lower(), perm; step('employee cannot approve refunds')
+
+    # ---------- end shift ----------
+    page.goto(BASE + '/#shift'); page.wait_for_selector('#live table')
+    page.screenshot(path=SHOTS + '10-shift.png')
+    # expected cash = 100000 + 58500 + 20000 - 5000 = 173500 ; count 173000 → 500 short
+    page.fill('[name=closeCash]', '173000'); page.fill('[name=closeZaadSH]', '24500')
+    page.click('#cf button'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.sheet:has-text("173,500")')
+    page.screenshot(path=SHOTS + '11-shift-end.png'); step('shift ended: expected cash 173,500, counted 173,000 → 500 short')
+    page.click('.ov .ft .btn.primary')
+    logout(page)
+
+    # ---------- Sacad, fast food ----------
+    login(page, 'Sacad'); page.wait_for_selector('#goShift'); page.click('#goShift'); page.click('#of button'); page.wait_for_selector('.tile')
+    page.click('.tile:has-text("Digaag")'); page.click('.tile:has-text("Chips")'); page.click('#payBtn')
+    page.wait_for_selector('#otype button:has-text("Delivery")'); page.click('#otype button[data-v="Delivery"]')
+    assert page.locator('[data-name=method] button[data-v="credit"]').count() == 0
+    page.wait_for_selector('#pt:has-text("75,000")'); page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    assert sheet('Sales')[-1][8] == 'Delivery'; step('fast food sale with order type, no credit option')
+    page.goto(BASE + '/#ingredients'); page.click('#add'); page.fill('.sheet input[data-id] >> nth=0', '25'); page.click('.ft .btn.gold')
+    page.click('#use'); page.fill('.sheet input[data-id] >> nth=0', '18'); page.click('.ft .btn.gold')
+    page.wait_for_selector('.toast.warn'); page.wait_for_timeout(300); page.screenshot(path=SHOTS + '12-ingredients.png')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    step('ingredients: add 25 flour, use 18 → low warning (7 ≤ 10)')
+    logout(page)
+
+    # ---------- owner approves + reports ----------
+    login(page, 'Hussein'); page.wait_for_selector('#dash .navy'); page.wait_for_timeout(500)
+    page.screenshot(path=SHOTS + '13-home-owner.png', full_page=True)
+    page.goto(BASE + '/#refunds'); page.wait_for_selector('[data-act="1"]'); page.click('[data-act="1"]'); page.click('.ov .ft .btn.primary')
+    page.wait_for_selector('.toast.ok'); assert sheet('Refunds')[0][10] == 'approved'; step('owner approves the refund')
+    page.goto(BASE + '/#reports'); page.wait_for_selector('#rep .card h3'); page.wait_for_timeout(300)
+    txt = page.inner_text('#rep'); assert 'Edahab' in txt
+    page.screenshot(path=SHOTS + '14-reports.png', full_page=True); step('reports: combined Shop + Fast Food')
+    page.goto(BASE + '/#more'); page.click('.menu-grid [data-r="lang"]'); page.wait_for_selector('#nav:has-text("Sell")')
+    page.screenshot(path=SHOTS + '15-english.png'); step('language switch to English')
+    page.goto(BASE + '/#stockcount'); page.wait_for_selector('#q'); page.fill('#q', 'Coca'); page.click('#res .li'); page.fill('[name=n]', '40'); page.click('.ov .ft .btn.gold')
+    page.click('#sv'); page.wait_for_selector('.sheet:has-text("1 products corrected")'); step('stock count corrects stock')
+    page.set_viewport_size({'width': 1280, 'height': 900}); page.goto(BASE + '/#home'); page.wait_for_selector('#dash .navy'); page.wait_for_timeout(400)
+    page.screenshot(path=SHOTS + '16-laptop.png'); step('laptop layout')
+
+    b.close()
+
+bad = [e for e in errors if 'Failed to fetch' not in e and 'ERR_INTERNET_DISCONNECTED' not in e]
+print('console errors:', bad if bad else 'none')
+print(len(results), 'steps passed')
+sys.exit(1 if bad else 0)
