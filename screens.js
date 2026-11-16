@@ -19,6 +19,9 @@
   // Extended floating action button (bottom-right), removed automatically when the screen changes.
   function fab(label, ic, onClick) { document.querySelectorAll('.fab').forEach(x => x.remove()); const b = document.createElement('button'); b.className = 'fab'; b.innerHTML = I(ic) + '<span>' + esc(label) + '</span>'; b.onclick = onClick; document.body.appendChild(b); return b; }
   const needOnline = () => { if (!S.online) throw new Error(t('This needs internet. Try again when online.')); };
+  const skel = n => Array.from({ length: n || 3 }, () => '<div class="skel"></div>').join('');
+  // Shown only if a page has never been opened with internet on this phone.
+  const notYet = e => `<div class="card empty">${I(e && e.kind === 'network' ? 'wifioff' : 'alert')}${esc(e && e.kind === 'network' ? t('This page will be ready after it opens once with internet.') : (e ? e.message : ''))}</div>`;
   const neg = v => num(v) ? '−' + fmt(v) : '0';
   const offlineNote = () => S.online ? '' : `<div class="card alert amber small">${esc(t('You are offline. This list may be old.'))}</div>`;
 
@@ -263,7 +266,7 @@
         <div class="card navy"><h3>${esc(t('Started'))} ${A.when(sh.openTs)}</h3><div class="grid2 small">
           <div>${esc(t('Opening cash'))}<br><b>${money(sh.openCash)}</b></div><div>Zaad<br><b>${fmt(sh.openZaadSH)} SH + $${fmt(sh.openZaadUSD)}</b></div>
           <div>Edahab<br><b>${fmt(sh.openEdSH)} SH + $${fmt(sh.openEdUSD)}</b></div></div></div>
-        <div id="live" class="card"><div class="muted">${esc(t('Loading totals…'))}</div></div>
+        <div id="live" class="card">${skel(1)}</div>
         <div class="card"><h3>${esc(t('End shift'))}</h3><p class="small muted">${esc(t('Count the money now and enter what you have.'))}</p>
           <form id="cf">${amountFields('close')}<label class="f"><span>${esc(t('Note'))}</span><input class="in" name="note"></label>
           <button class="btn red block lg">${esc(t('End shift'))}</button></form></div>`;
@@ -273,21 +276,39 @@
     if (isOwner() || can('viewReports')) loadShiftHistory();
   };
   async function loadLive(sh) {
-    const box = $('#live');
-    try {
-      await A.syncNow();
-      if (S.queue.some(o => o.data && o.data.id === sh.id)) { box.innerHTML = `<div class="muted">${esc(t('Waiting for internet to show totals.'))}</div>`; return; }
-      const r = await api('shift.preview', { id: sh.id });
-      const x = r.totals;
-      if (!$('#live')) return;
+    const draw = (srv) => {
+      const box = $('#live'); if (!box) return;
+      const keys = ['cashSales', 'zaadSales', 'edSales', 'creditSales', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'refCash', 'refZaad', 'refEd', 'saleCount'];
+      const x = {}; keys.forEach(k => x[k] = srv ? num(srv[k]) : 0);
+      // add what is still waiting on this phone, so totals are right even offline
+      let waiting = 0;
+      S.queue.forEach(o => {
+        if (o.userId !== S.user.id || !o.data) return;
+        const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method];
+        if (o.action === 'sale.create' && o.data.business === sh.business) {
+          const sub = o.data.items.reduce((a, it) => { const p = findProd(it.productId); return a + (p ? num(p.price) : 0) * num(it.qty); }, 0);
+          const tot = A.roundStep(sub - num(o.data.discount));
+          x[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales', credit: 'creditSales' }[o.data.method]] += tot; x.saleCount++; waiting++;
+        } else if (o.action === 'cust.pay' && k) { x['custPay' + k] += num(o.data.amount); waiting++; }
+        else if (o.action === 'exp.create' && o.data.business === sh.business && k) { x['exp' + k] += num(o.data.amount); waiting++; }
+      });
+      const rate = num(sh.rate) || A.rate();
+      x.expectedCash = num(sh.openCash) + x.cashSales + x.custPayCash - x.expCash - x.refCash;
+      x.expectedZaad = num(sh.openZaadSH) + num(sh.openZaadUSD) * rate + x.zaadSales + x.custPayZaad - x.expZaad - x.refZaad;
+      x.expectedEd = num(sh.openEdSH) + num(sh.openEdUSD) * rate + x.edSales + x.custPayEd - x.expEd - x.refEd;
       box.innerHTML = `<h3>${esc(t('So far in this shift'))} (${x.saleCount} ${esc(t('sales'))})</h3><table class="tbl">
         <tr><td>${esc(t('Cash sales'))}</td><td class="n">${fmt(x.cashSales)}</td></tr><tr><td>Zaad</td><td class="n">${fmt(x.zaadSales)}</td></tr>
         <tr><td>Edahab</td><td class="n">${fmt(x.edSales)}</td></tr><tr><td>${esc(t('Credit'))}</td><td class="n">${fmt(x.creditSales)}</td></tr>
         <tr><td>${esc(t('Customer payments (cash)'))}</td><td class="n">${fmt(x.custPayCash)}</td></tr><tr><td>${esc(t('Expenses (cash)'))}</td><td class="n">${neg(x.expCash)}</td></tr>
         <tr><td>${esc(t('Refunds (cash)'))}</td><td class="n">${neg(x.refCash)}</td></tr>
         <tr><td><b>${esc(t('Expected cash'))}</b></td><td class="n"><b>${money(x.expectedCash)}</b></td></tr>
-        <tr><td>${esc(t('Expected Zaad'))}</td><td class="n">${money(x.expectedZaad)}</td></tr><tr><td>${esc(t('Expected Edahab'))}</td><td class="n">${money(x.expectedEd)}</td></tr></table>`;
-    } catch (e) { if ($('#live')) box.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+        <tr><td>${esc(t('Expected Zaad'))}</td><td class="n">${money(x.expectedZaad)}</td></tr><tr><td>${esc(t('Expected Edahab'))}</td><td class="n">${money(x.expectedEd)}</td></tr></table>
+        ${waiting ? `<p class="small muted" style="margin:8px 0 0">${esc(t('Includes {n} items saved on this phone, not sent yet.', { n: waiting }))}</p>` : ''}`;
+    };
+    if (S.queue.some(o => o.data && o.data.id === sh.id)) return draw(null);   // shift itself not sent yet
+    const hit = A.cacheGet('shift.preview', { id: sh.id });
+    draw(hit ? hit.totals : null);
+    A.syncNow().then(() => A.cachedCall('shift.preview', { id: sh.id }, r => draw(r.totals))).catch(() => {});
   }
   async function closeShift(sh, f) {
     needOnline();
@@ -309,15 +330,14 @@
   }
   async function loadShiftHistory() {
     const box = $('#hist') || (() => { const d = document.createElement('div'); d.id = 'hist'; $('#main').appendChild(d); return d; })();
-    if (!S.online) return;
-    try {
-      const r = await api('shift.list', { business: S.biz, from: A.addDays(A.today(), -7), to: A.today() });
+    A.cachedCall('shift.list', { business: S.biz, from: A.addDays(A.today(), -7), to: A.today() }, r => {
       if (!$('#hist')) return;
       box.innerHTML = `<h3>${esc(t('Recent shifts'))}</h3><div class="list">${r.shifts.map(s => `<div class="li tap" data-id="${esc(s.id)}"><div class="main"><div class="name">${esc(s.userName)} · ${A.when(s.openTs)}</div>
         <div class="sub">${s.status === 'open' ? esc(t('Open')) : esc(t('Cash')) + ' ' + fmt(s.closeCash)}</div></div>${s.status === 'closed' ? diffTxt(s.diffCash) : '<span class="pill green">' + esc(t('Open')) + '</span>'}</div>`).join('') || `<div class="empty">${esc(t('No shifts'))}</div>`}</div>`;
       $$('.li', box).forEach(li => li.onclick = () => { const s = r.shifts.find(x => x.id === li.dataset.id); if (s.status === 'closed') shiftResult(s); });
-    } catch (e) {}
+    }).catch(() => {});
   }
+
 
   /* ======================= CUSTOMERS ======================= */
   Screens.customers = function (main) {
@@ -353,16 +373,15 @@
     const sh = sheet({ title: c.name, body: `<div class="totalbox"><div class="u">${esc(t('Owes'))}</div><div class="t">${money(c.balance)}</div><div class="u">${usd(c.balance)}</div></div>
       <div class="grid2"><button class="btn gold" id="pay">${I('cash')}${esc(t('Receive payment'))}</button><button class="btn" id="ed">${I('edit')}${esc(t('Edit'))}</button>
       ${c.phone ? `<a class="btn" href="tel:${esc(c.phone)}">${I('phone')}${esc(t('Call'))}</a><button class="btn" id="wa">${I('chat')}WhatsApp</button>` : ''}</div>
-      <div class="spacer"></div><h3>${esc(t('History'))}</h3><div id="led" class="muted">${esc(t('Loading…'))}</div>` });
+      <div class="spacer"></div><h3>${esc(t('History'))}</h3><div id="led">${skel(2)}</div>` });
     const el = sh.el;
     $('#pay', el).onclick = () => { sh.close(); paymentForm(c, redraw); };
     $('#ed', el).onclick = () => { sh.close(); customerForm(c, redraw); };
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(c.phone, t('Hello {n}, your balance at {b} is {x}. Thank you.', { n: c.name, b: biz, x: money(c.balance) }));
-    if (!S.online) { $('#led', el).textContent = t('History needs internet.'); return; }
-    api('cust.ledger', { customerId: c.id }).then(r => {
+    A.cachedCall('cust.ledger', { customerId: c.id }, r => {
       $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t(l.type === 'sale' ? 'Credit sale' : l.type === 'payment' ? 'Payment' : 'Refund'))}</div>
         <div class="sub">${A.when(l.ts)} · ${esc(l.userName)} ${l.method && l.type === 'payment' ? '· ' + esc(A.methodName(l.method)) : ''}</div></div><b class="${l.type === 'sale' ? 'red' : 'green'}">${l.type === 'sale' ? '+' : '−'}${fmt(l.amount)}</b></div>`).join('') || `<div class="empty">—</div>`}</div>`;
-    }).catch(e => { $('#led', el).textContent = e.message; });
+    }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }
   function paymentForm(c, done) {
     sheet({ title: t('Payment from {n}', { n: c.name }), body: `<p>${esc(t('Owes'))}: <b>${money(c.balance)}</b></p><form id="f">${moneyInput('amount', t('Amount (SH)'), '', 'autofocus')}
@@ -397,12 +416,16 @@
     loadExp();
   };
   async function loadExp() {
-    const box = $('#el'); if (!box) return;
-    let list = (S.localExp || []).filter(e => e.business === S.biz && S.queue.some(o => o.data && o.data.id === e.id));
-    try { if (S.online) { const r = await api('exp.list', { business: S.biz, from: A.today(), to: A.today() }); list = list.concat(r.expenses); } } catch (e) {}
-    if (!$('#el')) return;
-    box.innerHTML = `<h3>${esc(t('Today'))}</h3><div class="list">${list.map(e => `<div class="li"><div class="main"><div class="name">${esc(t(e.category))}</div><div class="sub">${esc(A.methodName(e.method))} · ${esc(e.userName || '')} ${esc(e.note || '')} ${e.pending ? '· ' + esc(t('Waiting to send')) : ''}</div></div><b>${fmt(e.amount)}</b></div>`).join('') || `<div class="empty">${esc(t('No expenses today'))}</div>`}</div>`;
+    const draw = (srv) => {
+      const box = $('#el'); if (!box) return;
+      const list = (S.localExp || []).filter(e => e.business === S.biz && S.queue.some(o => o.data && o.data.id === e.id)).concat(srv || []);
+      box.innerHTML = `<h3>${esc(t('Today'))}</h3><div class="list">${list.map(e => `<div class="li"><div class="main"><div class="name">${esc(t(e.category))}</div><div class="sub">${esc(A.methodName(e.method))} · ${esc(e.userName || '')} ${esc(e.note || '')} ${e.pending ? '· ' + esc(t('Waiting to send')) : ''}</div></div><b>${fmt(e.amount)}</b></div>`).join('') || `<div class="empty">${esc(t('No expenses today'))}</div>`}</div>`;
+    };
+    const q = { business: S.biz, from: A.today(), to: A.today() };
+    const hit = A.cacheGet('exp.list', q); draw(hit ? hit.expenses : []);
+    A.cachedCall('exp.list', q, r => draw(r.expenses)).catch(() => {});
   }
+
 
   /* ======================= HOME (dashboard) ======================= */
   Screens.home = function (main) {
@@ -418,15 +441,14 @@
       dstr = days[d.getUTCDay()] + ', ' + d.getUTCDate() + ' ' + mons[d.getUTCMonth()]; }
     main.innerHTML = `<div class="hero"><img src="icons/logo.png" alt="Saado Shop and Fast Food"><div class="hi">${esc(greet)}, <b>${esc(S.user.name)}</b> · ${esc(dstr)}</div><div id="herokpi"></div></div>
       ${bizs.length > 1 ? `<div class="chips scroll" id="hb" style="margin-bottom:12px">${['all', 'shop', 'food'].map(b => `<button class="chip ${sel === b ? 'on' : ''}" data-v="${b}">${b === 'all' ? '' : I(b === 'shop' ? 'store' : 'food')}${esc(b === 'all' ? t('Shop + Fast Food') : A.bizName(b))}</button>`).join('')}</div>` : ''}
-      <div id="dash"><div class="card muted">${esc(t('Loading…'))}</div></div>`;
+      <div id="dash">${skel(3)}</div>`;
     $$('#hb .chip').forEach(c => c.onclick = () => { S.homeBiz = sel = c.dataset.v; $$('#hb .chip').forEach(x => x.classList.toggle('on', x === c)); load(); });
-    const load = async () => {
-      const box = $('#dash');
-      const cached = A.LS.get('dash_' + S.user.id + sel);
-      if (cached) drawDash(box, cached, sel);
-      try { await A.syncNow(); const r = await api('report', { business: sel, from: A.today(), to: A.today() }); A.LS.set('dash_' + S.user.id + sel, r); if ($('#dash')) drawDash($('#dash'), r, sel); }
-      catch (e) { if (!cached && $('#dash')) box.innerHTML = `<div class="card red">${esc(e.message)}</div>`; else toast(e.message, 'err'); }
+    const load = () => {
+      const q = { business: sel, from: A.today(), to: A.today() };
+      return A.cachedCall('report', q, r => { if ($('#dash')) drawDash($('#dash'), r, sel); })
+        .catch(e => { if ($('#dash') && !$('#dash .stat')) $('#dash').innerHTML = notYet(e); });
     };
+    if (S.queue.length) A.syncNow().then(load);
     load();
   };
   function drawDash(box, r, sel) {
@@ -471,15 +493,16 @@
       ${bizs.length > 1 ? `<div class="chips" id="rb" style="margin-bottom:8px">${['all', 'shop', 'food'].map(b => `<button class="chip ${st.biz === b ? 'on' : ''}" data-v="${b}">${esc(b === 'all' ? t('Shop + Fast Food') : A.bizName(b))}</button>`).join('')}</div>` : ''}
       <div class="chips" id="pr">${[['today', t('Today')], ['yesterday', t('Yesterday')], ['week', t('7 days')], ['month', t('This month')]].map(p => `<button class="chip ${st.preset === p[0] ? 'on' : ''}" data-v="${p[0]}">${esc(p[1])}</button>`).join('')}</div>
       <div class="grid2" style="margin-top:8px"><label class="f"><span>${esc(t('From'))}</span><input class="in" type="date" id="rf" value="${st.from}"></label><label class="f"><span>${esc(t('To'))}</span><input class="in" type="date" id="rt" value="${st.to}"></label></div></div>
-      <div id="rep"><div class="card muted">${esc(t('Loading…'))}</div></div>`;
+      <div id="rep">${skel(3)}</div>`;
     $$('#rb .chip').forEach(c => c.onclick = () => { st.biz = c.dataset.v; $$('#rb .chip').forEach(x => x.classList.toggle('on', x === c)); load(); });
     $$('#pr .chip').forEach(c => c.onclick = () => { st.preset = c.dataset.v; [st.from, st.to] = presets[st.preset]; $('#rf').value = st.from; $('#rt').value = st.to; $$('#pr .chip').forEach(x => x.classList.toggle('on', x === c)); load(); });
     $('#rf').onchange = $('#rt').onchange = () => { st.from = $('#rf').value; st.to = $('#rt').value; st.preset = ''; $$('#pr .chip').forEach(x => x.classList.remove('on')); load(); };
-    const load = async () => {
-      $('#rep').innerHTML = `<div class="card muted">${esc(t('Loading…'))}</div>`;
-      try { await A.syncNow(); const r = await api('report', { business: st.biz, from: st.from, to: st.to }); if ($('#rep')) drawReport($('#rep'), r); }
-      catch (e) { if ($('#rep')) $('#rep').innerHTML = `<div class="card red">${esc(e.message)}</div>`; }
+    const load = () => {
+      const q = { business: st.biz, from: st.from, to: st.to };
+      if (!A.cacheGet('report', q) && $('#rep')) $('#rep').innerHTML = skel(3);
+      return A.cachedCall('report', q, r => { if ($('#rep')) drawReport($('#rep'), r); }).catch(e => { if ($('#rep')) $('#rep').innerHTML = notYet(e); });
     };
+    if (S.queue.length) A.syncNow().then(load);
     load();
   };
   function drawReport(box, r) {
@@ -704,7 +727,7 @@
   const ordersKey = () => 'orders_' + S.user.id + '_' + S.biz;
   async function loadOrders() {
     try { const r = await api('po.list', { business: S.biz }); S.orders = r.orders; A.LS.set(ordersKey(), r.orders); }
-    catch (e) { S.orders = S.orders || A.LS.get(ordersKey(), []); if (e.kind !== 'network') toast(e.message, 'err'); }
+    catch (e) { S.orders = S.orders || A.LS.get(ordersKey(), []); }
     return S.orders;
   }
   function upsertOrder(o) { S.orders = S.orders || []; const i = S.orders.findIndex(x => x.id === o.id); if (i >= 0) S.orders[i] = o; else S.orders.unshift(o); A.LS.set(ordersKey(), S.orders); }
@@ -745,7 +768,7 @@
       }
     };
     draw();
-    if (S.online) loadOrders().then(() => { if (S.route === 'purchasing') draw(); });
+    if (S.online) { const before = JSON.stringify(S.orders); loadOrders().then(() => { if (S.route === 'purchasing' && JSON.stringify(S.orders) !== before && !document.querySelector('.ov')) draw(); }); }
   };
   function supplierForm(s, done) {
     sheet({ title: s ? t('Edit supplier') : t('New supplier'), body: `<form id="f">${input('name', t('Name'), s && s.name, 'autofocus')}${input('phone', t('Phone / WhatsApp (e.g. 252634000000)'), s && s.phone, 'inputmode="tel"')}${input('note', t('Note'), s && s.note)}</form>`,
@@ -762,18 +785,17 @@
       <div class="grid2"><button class="btn gold" id="no">${I('plus')}${esc(t('New order'))}</button><button class="btn" id="pay">${I('cash')}${esc(t('Pay supplier'))}</button>
       ${s.phone ? `<a class="btn" href="tel:${esc(s.phone)}">${I('phone')}${esc(t('Call'))}</a><button class="btn" id="wa">${I('chat')}WhatsApp</button>` : ''}<button class="btn ghost" id="ed">${I('edit')}${esc(t('Edit'))}</button></div>
       <h3>${esc(t('Purchase orders'))}</h3><div class="list">${orders.map(o => `<div class="li tap" data-id="${esc(o.id)}"><div class="main"><div class="name">${esc(o.poNo)}</div><div class="sub">${A.when(o.createdTs)} · ${esc(t(PST[o.status][0]))}</div></div><b>${fmt(o.total)}</b></div>`).join('') || `<div class="empty small">—</div>`}</div>
-      <h3>${esc(t('Payments and deliveries'))}</h3><div id="led" class="muted small">${esc(t('Loading…'))}</div>` });
+      <h3>${esc(t('Payments and deliveries'))}</h3><div id="led">${skel(2)}</div>` });
     const el = sh.el;
     $('#no', el).onclick = () => { sh.close(); poForm(null, { supplierId: s.id }, done); };
     $('#pay', el).onclick = () => { sh.close(); supPayForm(s, done); };
     $('#ed', el).onclick = () => { sh.close(); supplierForm(s, done); };
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(s.phone, t('Hello {n},', { n: s.name }));
     $$('.li[data-id]', el).forEach(r => r.onclick = () => { sh.close(); poSheet(orders.find(o => o.id === r.dataset.id), done); });
-    if (!S.online) { $('#led', el).textContent = t('History needs internet.'); return; }
-    api('sup.ledger', { supplierId: s.id }).then(r => {
+    A.cachedCall('sup.ledger', { supplierId: s.id }, r => {
       $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => { const isPay = l.type === 'payment'; return `<div class="li"><span class="av ${isPay ? 'green' : 'gold'}" style="width:34px;height:34px">${I(isPay ? 'cash' : 'inbox', 'sm')}</span><div class="main"><div class="name">${esc(isPay ? t('Payment') : t('Goods received'))}${l.note ? ' · ' + esc(l.note) : ''}</div>
         <div class="sub">${A.when(l.ts)} · ${esc(l.userName)}${isPay ? ' · ' + esc(A.methodName(l.method)) : ''}</div></div><b class="${isPay ? 'green' : ''}">${isPay ? '−' : '+'}${fmt(l.type === 'purchase' ? num(l.amount) - num(l.paid) : l.amount)}</b></div>`; }).join('') || '<div class="empty small">—</div>'}</div>`;
-    }).catch(e => { $('#led', el).textContent = e.message; });
+    }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }
   function supPayForm(s, done) {
     sheet({ title: t('Pay {n}', { n: s.name }), body: `<p>${esc(t('We owe'))}: <b>${money(Math.max(0, num(s.balance)))}</b></p>${moneyInput('amount', t('Amount (SH)'), num(s.balance) > 0 ? num(s.balance) : '', 'autofocus')}
@@ -963,7 +985,7 @@
     if ($('#set')) $('#set').onclick = () => move('set', t('Correct the counts'));
     if (can('manageProducts')) fab(t('New ingredient'), 'plus', () => ingForm(null, draw));
     draw();
-    if (S.online) api('ing.log', { from: A.addDays(A.today(), -6), to: A.today() }).then(r => {
+    A.cachedCall('ing.log', { from: A.addDays(A.today(), -6), to: A.today() }, r => {
       if (!$('#log')) return;
       $('#log').innerHTML = `<h3>${esc(t('Last 7 days'))}</h3><div class="list">${r.logs.slice(0, 40).map(l => `<div class="li"><div class="main"><div class="name">${esc(t(l.name))}</div><div class="sub">${A.when(l.ts)} · ${esc(l.userName)}</div></div>
         <span class="${l.type === 'use' ? 'red' : 'green'}">${esc(t({ use: 'Used', add: 'Added', set: 'Corrected', purchase: 'Bought' }[l.type] || l.type))} ${fmt(l.qty)}</span></div>`).join('') || '<div class="empty">—</div>'}</div>`;
@@ -985,10 +1007,7 @@
     main.innerHTML = `<button class="btn gold block lg" id="req">${I('undo')}${esc(t('Request a refund'))}</button><div class="spacer"></div>
       ${approver ? `<h3>${esc(t('Waiting for approval'))}</h3><div id="pend"></div>` : ''}<h3>${esc(t('History'))}</h3><div id="hist"></div>`;
     $('#req').onclick = () => refundRequest(load);
-    const load = async () => {
-      if (!S.online) { $('#hist').innerHTML = `<div class="card muted">${esc(t('Refunds need internet.'))}</div>`; return; }
-      try {
-        const r = await api('refund.list', { business: S.biz });
+    const load = () => A.cachedCall('refund.list', { business: S.biz }, r => {
         if (!$('#hist')) return;
         const card = x => { let items = []; try { items = JSON.parse(x.items || '[]'); } catch (e) {} return `<div class="card" data-id="${esc(x.id)}"><div class="row"><b class="grow">${money(x.amount)} · ${esc(A.methodName(x.method))}</b>
           <span class="pill ${x.status === 'approved' ? 'green' : x.status === 'rejected' ? 'red' : 'gold'}">${esc(t(x.status === 'approved' ? 'Approved' : x.status === 'rejected' ? 'Rejected' : 'Pending'))}</span></div>
@@ -1003,8 +1022,7 @@
           await api('refund.decide', { id: b.closest('[data-id]').dataset.id, approve });
           toast(approve ? t('Refund approved') : t('Refund rejected'), 'ok'); await A.refresh(true); load();
         }));
-      } catch (e) { if ($('#hist')) $('#hist').innerHTML = `<div class="card red">${esc(e.message)}</div>`; }
-    };
+      }).catch(e => { if ($('#hist') && !$('#hist .card')) $('#hist').innerHTML = notYet(e); });
     load();
   };
   async function refundRequest(done) {
@@ -1049,17 +1067,14 @@
   };
   Screens.users = function (main) {
     if (!can('manageUsers')) return noPerm(main);
-    main.innerHTML = `<div id="ul"><div class="card muted">${esc(t('Loading…'))}</div></div>`;
-    const load = async () => {
-      try {
-        const r = await api('users.list', {});
+    main.innerHTML = `<div id="ul">${skel(3)}</div>`;
+    const load = () => A.cachedCall('users.list', {}, r => {
         if (!$('#ul')) return;
         $('#ul').innerHTML = `<div class="list">${r.users.map(u => `<div class="li tap lead" data-id="${esc(u.id)}"><span class="av ${u.role === 'owner' ? 'gold' : ''}">${esc(String(u.name).slice(0, 1).toUpperCase())}</span><div class="main"><div class="name">${esc(u.name)} ${u.active ? '' : `<span class="pill red">${esc(t('Disabled'))}</span>`}</div>
           <div class="sub">${esc(u.role === 'owner' ? t('Owner') : t('Employee'))} · ${esc(A.bizName(u.business))} · ${u.lang === 'en' ? 'English' : 'Soomaali'}${u.afterHours ? ' · ' + esc(t('after hours')) : ''}</div></div>${I('right', 'sm chev')}</div>`).join('')}</div>`;
         $$('#ul .li').forEach(li => li.onclick = () => userForm(r.users.find(u => u.id === li.dataset.id), r.perms, load));
         fab(t('New user'), 'plus', () => userForm(null, r.perms, load));
-      } catch (e) { if ($('#ul')) $('#ul').innerHTML = `<div class="card red">${esc(e.message)}</div>`; }
-    };
+      }).catch(e => { if ($('#ul') && !$('#ul .list')) $('#ul').innerHTML = notYet(e); });
     load();
   };
   function showPin(name, pin) {
@@ -1146,12 +1161,9 @@
     main.innerHTML = `<div class="card"><div class="grid2"><label class="f"><span>${esc(t('From'))}</span><input class="in" type="date" id="af" value="${A.addDays(A.today(), -2)}"></label>
       <label class="f"><span>${esc(t('To'))}</span><input class="in" type="date" id="at" value="${A.today()}"></label></div><input class="in" id="aq" placeholder="${esc(t('Search (name, action, item)'))}"></div><div id="al"></div>`;
     let timer;
-    const load = async () => {
-      try {
-        const r = await api('audit.list', { from: $('#af').value, to: $('#at').value, q: $('#aq').value });
+    const load = () => A.cachedCall('audit.list', { from: $('#af').value, to: $('#at').value, q: $('#aq').value }, r => {
         if ($('#al')) $('#al').innerHTML = `<div class="list">${r.audit.map(a => `<div class="li"><div class="main"><div class="name">${esc(a.action)} <span class="muted small">· ${esc(a.userName)}</span></div><div class="sub" style="word-break:break-word">${esc(String(a.details).slice(0, 300))}</div></div><span class="small muted">${A.when(a.ts)}</span></div>`).join('') || '<div class="empty">—</div>'}</div>`;
-      } catch (e) { if ($('#al')) $('#al').innerHTML = `<div class="card red">${esc(e.message)}</div>`; }
-    };
+      }).catch(e => { if ($('#al')) $('#al').innerHTML = notYet(e); });
     $('#af').onchange = $('#at').onchange = load; $('#aq').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 400); };
     load();
   };
@@ -1181,6 +1193,7 @@
         needOnline(); const f = formData(e.target);
         if (f.newPin !== f.newPin2) throw new Error(t('The two new PINs are different'));
         await api('me.changePin', { oldPin: f.oldPin, newPin: f.newPin });
+        A.rememberPin(S.user.id, f.newPin).catch(() => {});
         S.user.pinChanged = true; toast(t('PIN changed'), 'ok'); go('more');
       });
     };

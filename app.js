@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.1.1';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -105,7 +105,7 @@
     return j;
   }
   let busyCount = 0;
-  function progress(d) { busyCount = Math.max(0, busyCount + d); const b = document.getElementById('topprog'); if (b) b.style.opacity = busyCount ? 1 : 0; }
+  function progress(d) { busyCount = Math.max(0, busyCount + d); }   // background work is invisible on purpose (no loading bar)
 
   function setOnline(v) { if (S.online !== v) { S.online = v; updateTop(); } }
 
@@ -162,6 +162,7 @@
     S.token = b.token; S.expires = b.expires; S.user = b.user; S.data = b;
     S.lang = b.user.lang || S.lang; LS.set('lang', S.lang);
     LS.set('session', { token: S.token, expires: S.expires, user: S.user });
+    LS.set('sess_' + S.user.id, { token: S.token, expires: S.expires, user: S.user }); S.offlineSession = false;
     saveData();
     const saved = LS.get('biz_' + S.user.id);
     S.biz = myBiz().indexOf(saved) >= 0 ? saved : myBiz()[0];
@@ -169,6 +170,8 @@
   async function refresh(quiet) {
     try {
       const b = await api('boot', {});
+      const sig = d => d ? JSON.stringify([d.products, d.customers, d.suppliers, d.ingredients, d.shifts, d.settings, d.pendingRefunds, d.user]) : '';
+      const before = sig(S.data);
       const tok = S.token, exp = S.expires;
       S.data = b; S.user = b.user; S.token = tok; S.expires = exp;
       LS.set('session', { token: S.token, expires: S.expires, user: S.user });
@@ -176,7 +179,7 @@
       S.queue.forEach(op => { if (op.action === 'shift.open' && !S.data.shifts.some(x => x.id === op.data.id)) S.data.shifts.push(Object.assign({ status: 'open', userId: op.userId, userName: op.userName, openTs: op.ts.slice(0, 19), rate: rate() }, op.data)); });
       S.queue.forEach(op => { if (op.action === 'sale.create' && op.data.business === 'shop') op.data.items.forEach(it => { const p = findProd(it.productId); if (p) p.stock = num(p.stock) - num(it.qty); }); });
       saveData(); updateTop();
-      return true;
+      return sig(S.data) !== before ? 'changed' : true;
     } catch (e) { if (!quiet) toast(e.message, 'err'); return false; }
   }
   function sessionEnded() {
@@ -187,7 +190,7 @@
     const waiting = S.queue.filter(o => o.userId === S.user.id).length;
     if (waiting && !(await confirmBox(t('{n} items are not sent yet. They stay on this phone and will be sent when you log in again. Log out?', { n: waiting })))) return;
     try { if (S.online) await api('logout', {}); } catch (e) {}
-    S.token = null; S.cart = []; LS.del('session');
+    S.token = null; S.cart = []; LS.del('session');   // the per-user copy stays so this person can still unlock offline later
     showLogin();
   }
 
@@ -250,6 +253,29 @@
     return `<svg class="i ${cls || ''}" viewBox="0 0 24 24" aria-hidden="true">${parts}</svg>`;
   }
 
+  /* ---------------- offline login ----------------
+     After a normal login this phone keeps a salted hash of the PIN, so the same person can unlock the app
+     with their PIN while the internet is down. Everything they do waits in the queue and is sent later. */
+  async function sha(txt) {
+    if (!window.crypto || !crypto.subtle) return null;
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
+    return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+  async function rememberPin(userId, pin) {
+    const salt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(x => x.toString(16).padStart(2, '0')).join('');
+    const h = await sha(salt + ':' + pin); if (h) LS.set('cred_' + userId, { salt, h });
+  }
+  async function offlineUnlock(userId, pin) {
+    const c = LS.get('cred_' + userId, null), sess = LS.get('sess_' + userId, null), data = LS.get('data_' + userId, null);
+    if (!c || !sess || !data) return false;
+    if ((await sha(c.salt + ':' + pin)) !== c.h) throw new AppError(t('Wrong PIN.'), 'app');
+    S.token = sess.token; S.expires = sess.expires; S.user = sess.user; S.data = data; S.offlineSession = true;
+    LS.set('session', sess);
+    const saved = LS.get('biz_' + S.user.id); S.biz = myBiz().indexOf(saved) >= 0 ? saved : myBiz()[0];
+    S.lang = S.user.lang || S.lang;
+    return true;
+  }
+
   /* ---------------- login screen ---------------- */
   async function showLogin() {
     stopCamera();
@@ -297,8 +323,12 @@
       if (pin.length < 4) return err(t('PIN must be 4 to 6 digits'));
       const e = document.getElementById('lgerr'); e.innerHTML = `<span class="muted">${esc(t('Checking…'))}</span>`;
       try {
-        const b = await api('login', { userId: sel, pin });
-        LS.set('lastUser', sel); main.style.padding = ''; startSession(b); boot();
+        let b = null;
+        try { b = await api('login', { userId: sel, pin }); }
+        catch (x) { if (x.kind !== 'network' && x.kind !== 'config') throw x; }
+        if (b) { LS.set('lastUser', sel); rememberPin(sel, pin).catch(() => {}); main.style.padding = ''; startSession(b); boot(); setTimeout(prefetch, 1500); return; }
+        if (await offlineUnlock(sel, pin)) { LS.set('lastUser', sel); main.style.padding = ''; boot(); toast(t('Offline: sales are saved on this phone and sent later.'), 'warn', 4000); return; }
+        throw new AppError(t('No internet. This person must log in once with internet on this phone first.'), 'app');
       } catch (x) { pin = ''; drawPin(); err(x.message); }
     };
     pad.querySelectorAll('button').forEach(b => b.onclick = () => {
@@ -357,7 +387,7 @@
     const bizs = myBiz();
     top.innerHTML = `<div class="emb"><img src="icons/icon-192.png" alt=""></div><div class="ttl"></div>
       ${bizs.length > 1 ? `<div class="bizswitch">${bizs.map(b => `<button data-b="${b}" class="${S.biz === b ? 'on' : ''}" aria-label="${esc(bizName(b))}">${icon(b === 'shop' ? 'store' : 'food')}<span>${esc(b === 'shop' ? t('Shop') : t('Food'))}</span></button>`).join('')}</div>` : ''}
-      <button class="syncdot" id="syncdot"></button><div id="topprog"></div>`;
+      <button class="syncdot" id="syncdot"></button>`;
     top.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
       if (S.cart.length && b.dataset.b !== S.biz) { toast(t('Finish or park the current sale first'), 'warn'); return; }
       S.biz = b.dataset.b; LS.set('biz_' + S.user.id, S.biz); drawShell(); render();
@@ -383,9 +413,8 @@
     main.className = '';
     main.innerHTML = '';
     document.querySelectorAll('.cartbar, .fab').forEach(x => x.remove());
-    window.scrollTo(0, 0);
     setTitle();
-    void main.offsetWidth; main.className = 'page-in';
+    if (!S.soft) { window.scrollTo(0, 0); void main.offsetWidth; main.className = 'page-in'; }
     try { Screens[S.route](main, r.split('/').slice(1)); } catch (e) { console.error(e); main.innerHTML = `<div class="card red">${esc(t('Something went wrong on this screen:'))} ${esc(e.message)}</div>`; }
   }
 
@@ -397,6 +426,78 @@
       setTimeout(() => toast(t('Tip: change your PIN in More → My PIN.'), 'warn', 5000), 800);
     }
   }
+
+  /* ---------------- offline-first data ----------------
+     Every screen shows what is saved on this phone at once, then refreshes quietly in the background.
+     Nothing "loads" in front of the user; if the internet is gone, the last saved data is shown. */
+  const CKEYS = 'ckeys', CMAX = 45;
+  function ckey(action, data) { return 'c_' + (S.user ? S.user.id : '') + '_' + action + '_' + JSON.stringify(data || {}); }
+  function cacheGet(action, data) { const h = LS.get(ckey(action, data), null); return h ? h.r : null; }
+  function cachePut(action, data, r) {
+    const k = ckey(action, data);
+    let keys = LS.get(CKEYS, []).filter(x => x !== k); keys.push(k);
+    while (keys.length > CMAX) LS.del(keys.shift().replace(/^saado_/, ''));
+    LS.set(k, { r, at: Date.now() }); LS.set(CKEYS, keys);
+  }
+  /** onData(result, fromCache) is called with saved data first (if any) and again only if the server has something newer. */
+  async function cachedCall(action, data, onData) {
+    const hit = cacheGet(action, data);
+    if (hit && onData) onData(hit, true);
+    if (!S.online && hit) return hit;
+    try {
+      const r = await api(action, data);
+      const same = hit && JSON.stringify(hit) === JSON.stringify(r);
+      cachePut(action, data, r);
+      if (!same && onData) onData(r, false);
+      return r;
+    } catch (e) {
+      if (hit) return hit;
+      throw e;
+    }
+  }
+  // Re-draw the current screen with fresh data, but never while the user is typing, has a sheet open, or is mid-sale search.
+  function softRender() {
+    if (!S.user || !S.token || document.querySelector('.ov')) return;
+    const a = document.activeElement;
+    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
+    if (Array.from(document.querySelectorAll('#main input, #main textarea')).some(i => i.type !== 'checkbox' && i.type !== 'date' && i.value)) return;
+    const y = window.scrollY; S.soft = true;
+    try { render(); } finally { S.soft = false; }
+    window.scrollTo(0, y);
+  }
+  // Fill the phone's memory for every tab, so all of them open instantly and work offline.
+  let prefetching = false;
+  async function prefetch() {
+    if (prefetching || !S.online || !S.token || !S.user) return;
+    prefetching = true;
+    try {
+      const td = today(), jobs = [];
+      const bizs = myBiz();
+      if (can('viewReports')) {
+        (bizs.length > 1 ? ['all'].concat(bizs) : bizs).forEach(b => jobs.push(['report', { business: b, from: td, to: td }]));
+        jobs.push(['shift.list', { business: S.biz, from: addDays(td, -7), to: td }]);
+      }
+      jobs.push(['refund.list', { business: S.biz }]);
+      if (can('expenses')) jobs.push(['exp.list', { business: S.biz, from: td, to: td }]);
+      if (can('suppliers')) jobs.push(['po.list', { business: S.biz }]);
+      if (can('manageUsers')) jobs.push(['users.list', {}]);
+      if (can('audit')) jobs.push(['audit.list', { from: addDays(td, -2), to: td, q: '' }]);
+      if (S.biz === 'food' && (can('ingredients') || can('manageProducts'))) jobs.push(['ing.log', { from: addDays(td, -6), to: td }]);
+      const sh = myShift(); if (sh && !S.queue.some(o => o.data && o.data.id === sh.id)) jobs.push(['shift.preview', { id: sh.id }]);
+      for (const [a, d] of jobs) {
+        if (!S.online || !S.token) break;
+        try { cachePut(a, d, await api(a, d)); } catch (e) { if (e.kind === 'network') break; }
+      }
+    } finally { prefetching = false; }
+  }
+  async function backgroundUpdate() {
+    if (!S.token || !S.online || document.hidden) return;
+    await syncNow();
+    const r = await refresh(true);
+    if (r === 'changed') { drawShell(); softRender(); }
+    prefetch();
+  }
+  setInterval(backgroundUpdate, 120000);   // every 2 minutes: other users' changes appear without anyone waiting
 
   /* ---------------- UI helpers ---------------- */
   function toast(msg, type, ms) {
@@ -691,27 +792,27 @@
 
   /* ---------------- start ---------------- */
   window.addEventListener('hashchange', render);
-  window.addEventListener('online', () => { setOnline(true); syncNow(); });
+  window.addEventListener('online', () => { setOnline(true); backgroundUpdate(); });
   window.addEventListener('offline', () => setOnline(false));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncNow(); if (S.token && Date.now() > S.expires) sessionEnded(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (S.token && navigator.onLine && Date.now() > S.expires) return sessionEnded(); backgroundUpdate(); } });
   setInterval(() => { if (S.queue.length) syncNow(); }, 20000);
 
   function start() {
     const sess = LS.get('session', null);
-    if (sess && sess.token && sess.expires > Date.now()) {
+    if (sess && sess.token && (sess.expires > Date.now() || (!navigator.onLine && LS.get('data_' + sess.user.id, null)))) {
       S.token = sess.token; S.expires = sess.expires; S.user = sess.user;
       S.data = LS.get('data_' + S.user.id, null);
       const saved = LS.get('biz_' + S.user.id);
       S.biz = myBiz().indexOf(saved) >= 0 ? saved : myBiz()[0];
       S.lang = S.user.lang || S.lang;
-      if (S.data) { boot(); refresh(true).then(ok => { if (ok) { drawShell(); if (!document.querySelector('.ov')) render(); } }); return; }
-      refresh(true).then(ok => ok ? boot() : showLogin());
+      if (S.data) { boot(); refresh(true).then(ok => { if (ok === 'changed') { drawShell(); softRender(); } prefetch(); }); return; }
+      refresh(true).then(ok => { if (ok) { boot(); prefetch(); } else showLogin(); });
       return;
     }
     showLogin();
   }
 
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (reloaded || S.cart.length) return; reloaded = true; location.reload(); });
@@ -719,7 +820,7 @@
 
   window.App = {
     S, LS, CFG, APP_VERSION, t, esc, num, fmt, money, usd, rate, roundStep, uid, today, addDays, when, localParts, bizName, methodName,
-    icon, installApp, isStandalone, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
+    icon, installApp, isStandalone, rememberPin, cachedCall, cacheGet, prefetch, softRender, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
     toast, sheet, confirmBox, alertBox, withBusy, formData, seg, input, moneyInput, beep, go, render, drawShell, updateTop,
     startCamera, stopCamera, scanOnce, toCSV, download, parseCSV, readXLSX, makeDocPDF, shareFile, openWhatsApp, start
   };

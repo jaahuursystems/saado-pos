@@ -273,3 +273,6 @@ label.f { display: block; margin-bottom: 12px; } label.f > span { display: block
 @media print { #top, #nav, .cartbar, .fab, .noprint { display: none !important; } #main { padding: 0; } .card, .list { box-shadow: none; border: 1px solid #ccc; } body::before { display: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 .card > h3:first-child { margin-top: 0; } .card > h3 { margin-left: 0; }
+/* placeholder shown only the very first time a page is opened (afterwards saved data appears instantly) */
+.skel { height: 78px; border-radius: var(--r); margin-bottom: 12px; background: linear-gradient(90deg, #ECEFF3 25%, #F6F8FA 50%, #ECEFF3 75%); background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }

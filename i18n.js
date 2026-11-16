@@ -565,6 +565,11 @@ window.SO = {
   'Only open orders can be received': "Dalabyada furan oo keliya ayaa la qaadan karaa",
   'Paid amount is more than the received total': "Lacagta la bixiyey way ka badan tahay wadarta alaabta la helay",
   'Paid amount is more than the new total': "Lacagta la bixiyey way ka badan tahay wadarta cusub",
+  // added in v1.1.1 (offline-first)
+  'This page will be ready after it opens once with internet.': "Boggan wuxuu diyaar noqonayaa marka hal mar internet lagu furo.",
+  'Includes {n} items saved on this phone, not sent yet.': "Waxaa ku jira {n} shay oo taleefankan ku kaydsan, weli lama dirin.",
+  'Wrong PIN.': "PIN khaldan.",
+  'No internet. This person must log in once with internet on this phone first.': "Internet ma jiro. Qofkani waa inuu marka hore hal mar internet ku galaa taleefankan.",
   // messages that come from the server
   'Cart is empty': 'Dambiishu waa madhan tahay',
   'Choose a payment method': 'Dooro habka lacag-bixinta',

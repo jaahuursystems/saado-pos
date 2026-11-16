@@ -54,4 +54,6 @@ Pay now, part now, or on credit; every payment is also an expense. Orders are sh
 * Lost all owner PINs: in the Sheet menu **Saado POS → Reset an owner PIN**.
 
 ## Tests
-`node tests/backend.test.js` (backend rules) and `sh tests/run-e2e.sh` (real browser, phone screen, offline sale, shift, refund…).
+`node tests/backend.test.js` (backend rules), `sh tests/run-e2e.sh` (real browser, phone screen, sales, shift, refund, purchasing…) and `python3 tests/offline.py` with `node tests/server.js 8787` running (every tab offline, offline login, re-open offline).
+
+
