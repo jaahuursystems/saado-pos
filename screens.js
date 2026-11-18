@@ -259,7 +259,7 @@
   /* ======================= SHIFT ======================= */
   // Expected money per account and currency. srv = totals from the server (or null); queued items still on this phone are added.
   function liveTotals(sh, srv, moves) {
-    const k0 = ['cashInSH', 'cashInUSD', 'zaadInSH', 'zaadInUSD', 'edInSH', 'edInUSD', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'refCash', 'refZaad', 'refEd',
+    const k0 = ['cashInSH', 'cashInUSD', 'zaadInSH', 'zaadInUSD', 'edInSH', 'edInUSD', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'expCashUSD', 'expZaadUSD', 'expEdUSD', 'refCash', 'refZaad', 'refEd',
       'cashOutSH', 'cashOutUSD', 'cashSales', 'zaadSales', 'edSales', 'creditSales', 'saleCount', 'undoneCount'];
     const x = {}; k0.forEach(k => x[k] = srv ? num(srv[k]) : 0);
     let waiting = 0;
@@ -275,14 +275,14 @@
         else if (d.method !== 'cash' && d.payCur === 'USD') x[k + 'InUSD'] += Math.ceil(tot / A.rate() * 100) / 100;
         else x[k + 'InSH'] += tot;
       } else if (o.action === 'cust.pay' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['custPay' + k] += num(o.data.amount); waiting++; } }
-      else if (o.action === 'exp.create' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['exp' + k] += num(o.data.amount); waiting++; } }
+      else if (o.action === 'exp.create' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['exp' + k + (o.data.currency === 'USD' ? 'USD' : '')] += num(o.data.amount); waiting++; } }
       else if (o.action === 'cash.out') { x[o.data.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num(o.data.amount); waiting++; }
     });
     const r2 = v => Math.round(v * 100) / 100;
     x.eCashSH = num(sh.openCash) + x.cashInSH + x.custPayCash - x.expCash - x.refCash - x.cashOutSH;
-    x.eCashUSD = r2(num(sh.openCashUSD) + x.cashInUSD - x.cashOutUSD);
-    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD);
-    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD);
+    x.eCashUSD = r2(num(sh.openCashUSD) + x.cashInUSD - x.cashOutUSD - x.expCashUSD);
+    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD - x.expZaadUSD);
+    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD - x.expEdUSD);
     x.totalSH = x.eCashSH + x.eZaadSH + x.eEdSH; x.totalUSD = r2(x.eCashUSD + x.eZaadUSD + x.eEdUSD);
     x.waiting = waiting; x.rate = num(sh.rate) || A.rate();
     return x;
@@ -555,34 +555,93 @@
   }
 
   /* ======================= EXPENSES ======================= */
+  // Expenses: category from a dropdown, amount in SH or USD, what it was for, and a note. Undo only on the same day.
   Screens.expenses = function (main) {
     if (!can('expenses')) return noPerm(main);
     const cats = String(setting('expenseCats') || 'Other').split(',').map(x => x.trim()).filter(Boolean);
-    main.innerHTML = `<div class="card"><form id="f">
-      <label class="f"><span>${esc(t('Category'))}</span><div class="seg" data-name="category">${cats.map((c, i) => `<button data-v="${esc(c)}" class="${i === cats.length - 1 ? 'on' : ''}">${esc(t(c))}</button>`).join('')}</div></label>
-      ${moneyInput('amount', t('Amount (SH)'), '')}<label class="f"><span>${esc(t('Paid with'))}</span>${methodSeg('method', ['cash', 'zaad', 'edahab'], 'cash')}</label>
-      ${input('note', t('Note'), '')}<button class="btn gold block lg">${esc(t('Save expense'))}</button></form></div><div id="el"></div>`;
-    $$('#f .seg').forEach(s => seg(s));
-    $('#f').onsubmit = e => {
-      e.preventDefault(); const f = e.target;
-      const amt = num($('[name=amount]', f).value); if (amt <= 0) return toast(t('Enter an amount'), 'err');
-      const d = { id: A.uid('E'), business: S.biz, category: $('[data-name=category]', f).dataset.value, amount: amt, method: $('[data-name=method]', f).dataset.value, note: $('[name=note]', f).value };
-      enqueue('exp.create', d); S.localExp = (S.localExp || []).concat([Object.assign({ ts: new Date().toISOString(), userName: S.user.name, pending: 1 }, d)]);
-      toast(t('Expense saved'), 'ok'); $('[name=amount]', f).value = ''; $('[name=note]', f).value = ''; loadExp();
+    if (cats.indexOf('Other') < 0) cats.push('Other');
+    S.expDay = S.expDay && can('viewReports') ? S.expDay : A.today();
+    main.innerHTML = `<div class="card"><form id="f" autocomplete="off">
+      <label class="f"><span>${esc(t('Category'))}</span><select class="in" name="category" id="ecat"><option value="">${esc(t('Choose a category…'))}</option>${cats.map(c => `<option value="${esc(c)}">${esc(t(c))}</option>`).join('')}</select></label>
+      <label class="f"><span>${esc(t('Currency'))}</span><div class="seg" data-name="currency" id="ecur"><button data-v="SH" class="on">${esc(t('Shillings (SH)'))}</button><button data-v="USD">${esc(t('Dollars (USD)'))}</button></div></label>
+      <label class="f"><span id="eamtL">${esc(t('Amount (SH)'))}</span><input class="in big" name="amount" inputmode="decimal" placeholder="0"><span class="small muted" id="eeq"></span></label>
+      <label class="f"><span>${esc(t('Paid with'))}</span>${methodSeg('method', ['cash', 'zaad', 'edahab'], 'cash')}</label>
+      <label class="f"><span id="edescL">${esc(t('What was it for?'))}</span><textarea class="in" name="description" rows="2" maxlength="200" placeholder="${esc(t('e.g. Electricity bill for October'))}"></textarea></label>
+      <label class="f"><span>${esc(t('Note (optional)'))}</span><input class="in" name="note" maxlength="120" placeholder="${esc(t('e.g. receipt is in the drawer'))}"></label>
+      <button class="btn gold block lg">${I('check')}${esc(t('Save expense'))}</button>
+      <p class="small muted center" style="margin:8px 0 0">${esc(t('You can undo an expense only on the same day.'))}</p></form></div>
+      <div class="row" style="align-items:center;margin:14px 2px 6px"><h3 class="grow" style="margin:0">${esc(S.expDay === A.today() ? t('Today') : S.expDay)}</h3>
+        ${can('viewReports') ? `<input type="date" class="in" id="eday" value="${S.expDay}" max="${A.today()}" style="width:auto">` : ''}</div><div id="el"></div>`;
+    $$('#f .seg').forEach(x => seg(x, () => upd()));
+    const f = $('#f'), cur = () => $('#ecur').dataset.value;
+    const upd = () => {
+      const usd = cur() === 'USD', v = num($('[name=amount]', f).value);
+      $('#eamtL').textContent = usd ? t('Amount ($)') : t('Amount (SH)');
+      $('#eeq').textContent = usd && v > 0 ? '= ' + money(Math.round(v * A.rate())) + ' (1 USD = ' + fmt(A.rate()) + ')' : '';
+      $('#edescL').textContent = $('#ecat').value === 'Other' ? t('What was it for? (needed for “Other”)') : t('What was it for?');
     };
-    loadExp();
+    $('[name=amount]', f).oninput = upd; $('#ecat').onchange = upd;
+    if ($('#eday')) $('#eday').onchange = e => { S.expDay = e.target.value || A.today(); A.render(); };
+    f.onsubmit = e => {
+      e.preventDefault();
+      const cat = $('#ecat').value; if (!cat) return toast(t('Choose a category'), 'err');
+      const usd = cur() === 'USD', amt = usd ? Math.round(parseFloat(String($('[name=amount]', f).value).replace(/,/g, '')) * 100) / 100 : num($('[name=amount]', f).value);
+      if (!(amt > 0)) return toast(t('Enter an amount'), 'err');
+      const desc = $('[name=description]', f).value.trim();
+      if (cat === 'Other' && !desc) { $('[name=description]', f).focus(); return toast(t('Write what the money was for'), 'err'); }
+      const d = { id: A.uid('E'), business: S.biz, category: cat, amount: amt, currency: usd ? 'USD' : 'SH', method: $('[data-name=method]', f).dataset.value, description: desc, note: $('[name=note]', f).value.trim() };
+      enqueue('exp.create', d);
+      S.localExp = (S.localExp || []).concat([Object.assign({ ts: new Date().toISOString(), date: A.today(), userName: S.user.name, pending: 1, usdAmount: usd ? amt : '' }, d, { amount: usd ? Math.round(amt * A.rate()) : amt })]);
+      toast(t('Expense saved'), 'ok');
+      $('[name=amount]', f).value = ''; $('[name=description]', f).value = ''; $('[name=note]', f).value = ''; $('#ecat').value = ''; upd();
+      if (S.expDay !== A.today()) { S.expDay = A.today(); A.render(); } else loadExp();
+    };
+    upd(); loadExp();
   };
+  function expRow(e) {
+    const gone = e.status === 'undone', mine = e.userName === S.user.name || isOwner();
+    const canUndo = !gone && !e.ref && mine && (e.date || A.today()) === A.today();
+    const amt = e.currency === 'USD' ? usdF(e.usdAmount) + ` <span class="small muted">(${fmt(e.amount)})</span>` : fmt(e.amount);
+    return `<div class="li lead exp ${gone ? 'gone' : ''}" data-id="${esc(e.id)}"><span class="av ${gone ? 'gray' : e.currency === 'USD' ? 'green' : 'gold'}">${I('wallet')}</span>
+      <div class="main"><div class="name">${esc(t(e.category))}${e.currency === 'USD' ? ' <span class="pill">USD</span>' : ''}${gone ? ` <span class="pill red">${esc(t('Undone'))}</span>` : ''}</div>
+        ${e.description ? `<div class="desc">${esc(e.description)}</div>` : ''}${e.note ? `<div class="sub">${I('edit', 'sm')} ${esc(e.note)}</div>` : ''}
+        <div class="sub">${esc(A.methodName(e.method))} · ${esc(e.userName || '')}${e.ts ? ' · ' + esc(A.when(e.ts)) : ''}${e.pending ? ' · ' + esc(t('Waiting to send')) : ''}</div>
+        ${gone ? `<div class="sub red">${esc(t('Undone by {n}: {r}', { n: e.undoneBy || '', r: t(e.undoReason || '') }))}</div>` : ''}</div>
+      <div class="end"><b class="${gone ? 'strike' : ''}">${amt}</b>${canUndo ? `<button class="btn sm text" data-undo>${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div></div>`;
+  }
   async function loadExp() {
+    const day = S.expDay || A.today();
     const draw = (srv) => {
       const box = $('#el'); if (!box) return;
-      const list = (S.localExp || []).filter(e => e.business === S.biz && S.queue.some(o => o.data && o.data.id === e.id)).concat(srv || []);
-      box.innerHTML = `<h3>${esc(t('Today'))}</h3><div class="list">${list.map(e => `<div class="li"><div class="main"><div class="name">${esc(t(e.category))}</div><div class="sub">${esc(A.methodName(e.method))} · ${esc(e.userName || '')} ${esc(e.note || '')} ${e.pending ? '· ' + esc(t('Waiting to send')) : ''}</div></div><b>${fmt(e.amount)}</b></div>`).join('') || `<div class="empty">${esc(t('No expenses today'))}</div>`}</div>`;
+      const local = day === A.today() ? (S.localExp || []).filter(e => e.business === S.biz && S.queue.some(o => o.data && o.data.id === e.id)) : [];
+      const list = local.concat((srv || []).filter(e => !local.some(l => l.id === e.id)));
+      const total = list.filter(e => e.status !== 'undone').reduce((a, e) => a + num(e.amount), 0);
+      box.innerHTML = list.length ? `<div class="list">${list.map(expRow).join('')}</div><p class="small muted" style="text-align:right;margin:8px 4px">${esc(t('Total'))}: <b>${money(total)}</b></p>`
+        : `<div class="empty">${esc(day === A.today() ? t('No expenses today') : t('No expenses on this day'))}</div>`;
+      $$('#el [data-undo]').forEach(b => b.onclick = () => expUndo(list.find(e => e.id === b.closest('[data-id]').dataset.id)));
     };
-    const q = { business: S.biz, from: A.today(), to: A.today() };
+    const q = { business: S.biz, from: day, to: day };
     const hit = A.cacheGet('exp.list', q); draw(hit ? hit.expenses : []);
     A.cachedCall('exp.list', q, r => draw(r.expenses)).catch(() => {});
   }
-
+  function expUndo(e) {
+    if (!e) return;
+    const reasons = ['Wrong amount', 'Wrong category', 'Entered twice', 'Not paid after all'];
+    sheet({ title: t('Undo expense'), body: `<p style="margin-top:0"><b>${esc(t(e.category))}</b> · ${e.currency === 'USD' ? usdF(e.usdAmount) : money(e.amount)}${e.description ? '<br><span class="muted">' + esc(e.description) + '</span>' : ''}</p>
+        <label class="f"><span>${esc(t('Why'))}</span><div class="chips" id="rs">${reasons.map(r => `<button type="button" class="chip" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
+        <p class="small muted">${esc(t('The money goes back into the expected drawer. The record stays, marked “undone”.'))}</p>`,
+      onOpen: el => $$('#rs .chip', el).forEach(c => c.onclick = () => { $$('#rs .chip', el).forEach(x => x.classList.toggle('on', x === c)); }),
+      actions: [{ label: t('Back') }, { label: t('Undo expense'), cls: 'red', onClick: async (close, el) => {
+        const on = $('#rs .chip.on', el); if (!on) return toast(t('Choose a reason'), 'err');
+        const qi = S.queue.findIndex(o => o.action === 'exp.create' && o.data.id === e.id);
+        if (qi >= 0) {   // still on this phone: just take it out
+          S.queue.splice(qi, 1); A.LS.set('queue', S.queue); S.localExp = (S.localExp || []).filter(x => x.id !== e.id);
+        } else {
+          needOnline(); await api('exp.undo', { id: e.id, reason: on.dataset.r });
+        }
+        close(); toast(t('Expense undone'), 'ok'); loadExp();
+      } }] });
+  }
 
   /* ======================= HOME (dashboard) ======================= */
   Screens.home = function (main) {
@@ -639,9 +698,8 @@
           <div class="sub" style="white-space:normal">${esc(b.last.userName)} · ${esc(t('Cash'))} ${fmt(b.last.cash)} · Zaad ${fmt(b.last.zaad)} · Edahab ${fmt(b.last.edahab)}</div></div>${diffTxt(b.last.diffCash)}</div>` : ''}`).join('') || `<div class="empty">${I('clock')}${esc(t('No shifts'))}</div>`}</div>
       <div class="grid2"><div><h3>${esc(t('Best sellers'))}</h3><div class="list">${r.topItems.slice(0, 5).map((i, n) => `<div class="li"><span class="av gold" style="width:28px;height:28px;border-radius:9px;font-size:13px">${n + 1}</span><div class="main name">${esc(i.name)}</div><span class="muted small">×${fmt(i.qty)}</span></div>`).join('') || `<div class="empty small">—</div>`}</div></div>
         <div><h3>${esc(t('Top debtors'))}</h3><div class="list">${r.debts.slice(0, 5).map(c => `<div class="li"><div class="main name">${esc(c.name)}</div><b class="red small">${fmt(c.balance)}</b></div>`).join('') || `<div class="empty small">—</div>`}</div></div></div>
-      <div class="col" style="margin-top:4px"><button class="btn green block lg" id="wa">${I('chat')}${esc(t('Send daily summary on WhatsApp'))}</button>${can('viewInsights') ? `<button class="btn block" id="ins">${I('chart')}${esc(t('Insights'))}</button>` : ''}<button class="btn block" id="rep">${I('file')}${esc(t('Full reports'))}</button></div>`;
+      <div class="col" style="margin-top:4px">${can('viewInsights') ? `<button class="btn block" id="ins">${I('chart')}${esc(t('Insights'))}</button>` : ''}<button class="btn block" id="rep">${I('file')}${esc(t('Full reports'))}</button></div>`;
     $$('[data-go]', box).forEach(x => x.onclick = () => go(x.dataset.go));
-    $('#wa', box).onclick = () => A.openWhatsApp(setting('ownerWhatsApp'), summaryText(r));
     $('#rep', box).onclick = () => go('reports');
     if ($('#ins', box)) $('#ins', box).onclick = () => go('insights');
   }
@@ -701,8 +759,7 @@
       ${r.suppliersOwed.length ? `<div class="card"><h3>${esc(t('We owe suppliers'))}</h3>${tbl([t('Supplier'), t('Amount')], r.suppliersOwed.map(s => `<tr><td>${esc(s.name)}</td><td class="n">${fmt(s.balance)}</td></tr>`))}</div>` : ''}
       <div class="card"><h3>${esc(t('Low stock'))}</h3>${tbl([t('Item'), t('Stock'), t('Low level')], r.lowStock.map(p => `<tr><td>${esc(p.name)}</td><td class="n red">${fmt(p.stock)}</td><td class="n">${fmt(p.lowStock)}</td></tr>`).concat(r.lowIngredients.map(g => `<tr><td>${esc(t(g.name))} (${esc(t(g.unit))})</td><td class="n red">${fmt(g.stock)}</td><td class="n">${fmt(g.lowLevel)}</td></tr>`)))}</div>
       ${r.expiring.length ? `<div class="card"><h3>${esc(t('Expired / expiring'))}</h3>${tbl([t('Item'), t('Expiry'), t('Stock')], r.expiring.map(p => `<tr><td>${esc(p.name)}</td><td class="n ${p.expired ? 'red' : 'amber'}">${esc(p.expiry)}</td><td class="n">${fmt(p.stock)}</td></tr>`))}</div>` : ''}
-      <div class="col noprint"><button class="btn green block" id="wa">${I('chat')}${esc(t('Send summary on WhatsApp'))}</button></div>`;
-    $('#wa', box).onclick = () => A.openWhatsApp(setting('ownerWhatsApp'), summaryText(r));
+`;
   }
 
   /* ======================= MORE ======================= */
@@ -1246,7 +1303,7 @@
   const PERM_LABELS = {
     viewReports: 'See dashboard and reports', viewProfit: 'See cost and profit', viewStock: 'See stock quantities', changePrices: 'Change prices',
     manageProducts: 'Add and edit products and ingredients', discount: 'Give discounts', customers: 'Credit customers and debt payments', suppliers: 'Suppliers and purchases',
-    expenses: 'Record expenses', ingredients: 'Enter ingredient usage', stockCount: 'Do stock counts', approveRefunds: 'Approve refunds',
+    expenses: 'Expenses tab (see and add expenses)', ingredients: 'Enter ingredient usage', stockCount: 'Do stock counts', approveRefunds: 'Approve refunds',
     manageUsers: 'Manage users and PINs', settings: 'Change settings', export: 'Export data (CSV)', audit: 'See the audit log',
     undoSales: 'Undo own sales in their shift', cashOut: 'Record cash taken out of the drawer', voidSales: 'Void any sale (any time)',
     deleteProducts: 'Delete products', deleteCustomers: 'Delete customers (no debt only)', deleteSuppliers: 'Delete suppliers (nothing owed only)',
@@ -1312,10 +1369,16 @@
         <div class="chk"><span class="av">${I('store')}</span><span class="main"><b>${esc(s.shopName || t('Shop'))}</b><div class="small muted">${esc(t('Always open'))}</div></span></div>
         <label class="chk"><span class="av ${s.food_enabled === '0' ? 'gray' : ''}">${I('food')}</span><span class="main"><b>${esc(s.foodName || t('Fast Food'))}</b><div class="small ${s.food_enabled === '0' ? 'red bold' : 'muted'}">${esc(s.food_enabled === '0' ? t('Closed') : t('Open'))}</div></span><input type="checkbox" name="food_enabled" ${s.food_enabled === '0' ? '' : 'checked'}></label>
         <p class="small muted" style="margin:6px 2px 0">${esc(t('Switch off while Fast Food is closed: its menu, ingredients, reports and staff are hidden. Nothing is deleted; switch on again to bring it all back.'))}</p></div>
-      <div class="card"><h3 style="margin-top:0">${esc(t('Alerts and shifts'))}</h3>
-        <label class="chk"><input type="checkbox" name="lowStockEmail" ${on('lowStockEmail')}><span class="main">${esc(t('Email at once when an item reaches its warning level'))}<div class="small muted">${esc(t('One email per item until it is restocked'))}</div></span></label>
-        <div class="grid2" style="margin-top:8px"><label class="f"><span>${esc(t('Weekly email on'))}</span><select class="in" name="weeklyDay">${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<option value="${d}" ${(s.weeklyDay || 'Thu') === d ? 'selected' : ''}>${esc(t(d))}</option>`).join('')}</select></label>
-        ${moneyInput('lateMin', t('Late after (minutes)'), s.lateMin || '10')}</div></div>
+      <div class="card" id="whenC"><h3 style="margin-top:0">${esc(t('When emails are sent'))}</h3>
+        <div class="when"><span class="av">${I('calendar')}</span><div class="grow"><b>${esc(t('Daily report'))}</b><div class="grid2"><label class="f"><span>${esc(t('Time'))}</span>${timeSel('emailDailyTime', s.emailDailyTime || '23:30')}</label></div></div></div>
+        <div class="when"><span class="av">${I('calendar')}</span><div class="grow"><b>${esc(t('Weekly report'))}</b><div class="grid2"><label class="f"><span>${esc(t('Day'))}</span><select class="in" name="weeklyDay">${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<option value="${d}" ${(s.weeklyDay || 'Thu') === d ? 'selected' : ''}>${esc(t(DAYNAME[d]))}</option>`).join('')}</select></label>
+          <label class="f"><span>${esc(t('Time'))}</span>${timeSel('emailWeeklyTime', s.emailWeeklyTime || '23:30')}</label></div></div></div>
+        <div class="when"><span class="av">${I('calendar')}</span><div class="grow"><b>${esc(t('Monthly report'))}</b><div class="grid2"><label class="f"><span>${esc(t('Day'))}</span><select class="in" name="monthlyWhen"><option value="last" ${s.monthlyWhen !== 'first' ? 'selected' : ''}>${esc(t('Last day of the month'))}</option><option value="first" ${s.monthlyWhen === 'first' ? 'selected' : ''}>${esc(t('1st of the next month'))}</option></select></label>
+          <label class="f"><span>${esc(t('Time'))}</span>${timeSel('emailMonthlyTime', s.emailMonthlyTime || '23:30')}</label></div></div></div>
+        <div class="when"><span class="av gold">${I('box')}</span><div class="grow"><b>${esc(t('Low-stock alert'))}</b><div class="grid2"><label class="f"><span>${esc(t('When'))}</span><select class="in" id="lsm"><option value="now" ${s.lowStockEmail !== '0' && s.lowStockMode !== 'daily' ? 'selected' : ''}>${esc(t('At once'))}</option><option value="daily" ${s.lowStockEmail !== '0' && s.lowStockMode === 'daily' ? 'selected' : ''}>${esc(t('Once a day (one list)'))}</option><option value="off" ${s.lowStockEmail === '0' ? 'selected' : ''}>${esc(t('Off'))}</option></select></label>
+          <label class="f" id="lstW"><span>${esc(t('Time'))}</span>${timeSel('lowStockTime', s.lowStockTime || '08:00')}</label></div></div></div>
+        <p class="small muted" style="margin:4px 2px 0">${esc(t('A time before 12:00 sends the report for the day or week that ended yesterday. Each person picks which emails they get in “Email reports” below.'))}</p></div>
+      <div class="card"><h3 style="margin-top:0">${esc(t('Shifts'))}</h3>${moneyInput('lateMin', t('Late after (minutes)'), s.lateMin || '10')}</div>
       <div class="card"><h3>${esc(t('Money'))}</h3><div class="grid2">${moneyInput('usdRate', t('1 USD = ? SH'), s.usdRate)}${moneyInput('roundStep', t('Round totals to nearest (SH)'), s.roundStep)}</div></div>
       <div class="card"><h3>${esc(t('Zaad and Edahab accounts'))}</h3><div class="grid2">${input('shop_zaad', t('Shop Zaad'), s.shop_zaad, 'inputmode="numeric"')}${input('shop_edahab', t('Shop Edahab'), s.shop_edahab, 'inputmode="numeric"')}
         ${input('food_zaad', t('Fast Food Zaad'), s.food_zaad, 'inputmode="numeric"')}${input('food_edahab', t('Fast Food Edahab'), s.food_edahab, 'inputmode="numeric"')}</div></div>
@@ -1330,7 +1393,7 @@
         <div class="grid2"><label class="f"><span>${esc(t('Opens'))}</span><input class="in" type="time" name="food_open" value="${esc(s.food_open)}"></label><label class="f"><span>${esc(t('Closes'))}</span><input class="in" type="time" name="food_close" value="${esc(s.food_close)}"></label></div></div>
       <div class="card"><h3>${esc(t('Shop hours'))}</h3>${input('shop_hours', t('Shifts (e.g. 08:00-13:00,16:00-23:00)'), s.shop_hours)}${moneyInput('graceMin', t('Minutes allowed before/after hours'), s.graceMin)}</div>
       <div class="card"><h3>${esc(t('Names and phones'))}</h3>${input('shopName', t('Shop name'), s.shopName)}${input('foodName', t('Fast Food name'), s.foodName)}
-        ${input('shopPhone', t('Phone shown on supplier orders'), s.shopPhone, 'inputmode="tel"')}${input('ownerWhatsApp', t('WhatsApp number for daily summary (e.g. 252634000000)'), s.ownerWhatsApp, 'inputmode="tel"')}</div>
+        ${input('shopPhone', t('Phone shown on supplier orders'), s.shopPhone, 'inputmode="tel"')}</div>
       <button class="btn gold block lg">${esc(t('Save settings'))}</button></form>
       <div class="card" id="emc" style="margin-top:12px"></div>
       ${isOwner() ? `<div class="card" style="margin-top:12px"><h3>${esc(t('Backup'))}</h3><p class="small muted">${esc(t('A copy of the Sheet is saved to Google Drive every night (folder "Saado POS Backups"). You can also make one now.'))}</p><button class="btn block" id="bk">${esc(t('Back up now'))}</button></div><div class="card" id="arc"></div><div class="card danger" id="dz"></div>` : ''}`;
@@ -1343,6 +1406,7 @@
         needOnline(); const f = formData(e.target), values = {};
         Object.keys(f).forEach(k => { values[k] = typeof f[k] === 'boolean' ? (f[k] ? '1' : '0') : f[k]; });
         values.food_orderTypes = types.join(',');
+        const lsm = $('#lsm').value; values.lowStockEmail = lsm === 'off' ? '0' : '1'; if (lsm !== 'off') values.lowStockMode = lsm;
         if (values.food_enabled === '0' && S.data.settings.food_enabled !== '0' && !(await confirmBox(t('Close Fast Food? Its menu, reports and staff are hidden until you switch it on again. Nothing is deleted.'), t('Close Fast Food'), 'red'))) return;
         const r = await api('settings.save', { values });
         S.data.settings = r.settings; A.saveData(); toast(t('Settings saved'), 'ok');
@@ -1351,6 +1415,7 @@
       });
     };
     $('#inst').onclick = () => A.installApp();
+    const lsw = () => { $('#lstW').style.visibility = $('#lsm').value === 'daily' ? '' : 'hidden'; }; $('#lsm').onchange = lsw; lsw();
     emailCard($('#emc'));
     if ($('#arc')) dataCards($('#arc'), $('#dz'));
     if ($('#bk')) $('#bk').onclick = e => withBusy(e.target, async () => { needOnline(); const r = await api('backup.now', {}); toast(t('Backup saved: {n}', { n: r.name }), 'ok', 5000); });
@@ -1405,6 +1470,20 @@
   }
 
   /* ======================= MY EMAIL REPORTS ======================= */
+  const DAYNAME = { Sat: 'Saturday', Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday' };
+  // A time picker in half-hour steps (the email timer checks every 15 minutes)
+  function timeSel(name, v) {
+    const opts = []; for (let m = 0; m < 1440; m += 30) opts.push(String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'));
+    if (v && opts.indexOf(v) < 0) opts.push(v), opts.sort();
+    return `<select class="in" name="${name}">${opts.map(o => `<option ${o === v ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
+  }
+  // "Daily 23:30 · Weekly Thursday 23:30 · Monthly last day 23:30 · Low stock at once"
+  function schedTxt(withLow) {
+    const g = k => setting(k) || '', mo = g('monthlyWhen') === 'first' ? t('1st of the next month') : t('Last day of the month');
+    let x = t('Daily: {a} · Weekly: {d} {b} · Monthly: {m} {c}', { a: g('emailDailyTime') || '23:30', d: t(DAYNAME[g('weeklyDay') || 'Thu']), b: g('emailWeeklyTime') || '23:30', m: mo, c: g('emailMonthlyTime') || '23:30' });
+    if (withLow) x += ' · ' + t('Low stock') + ': ' + (g('lowStockEmail') === '0' ? t('Off') : g('lowStockMode') === 'daily' ? t('once a day at {t}', { t: g('lowStockTime') || '08:00' }) : t('at once'));
+    return x;
+  }
   Screens.emails = function (main) {
     main.innerHTML = `<div id="me">${skel(1)}</div>`;
     A.cachedCall('recip.mine', {}, r => {
@@ -1412,7 +1491,7 @@
       if (!r.recipients.length) { $('#me').innerHTML = `<div class="card empty">${I('bell')}${esc(t('You are not on the email list yet. Ask the owner to add you in Settings → Email reports.'))}</div>`; return; }
       $('#me').innerHTML = r.recipients.map(x => `<div class="card" data-id="${esc(x.id)}"><b>${esc(x.email)}</b><div class="small muted" style="margin:2px 0 10px">${esc(t('Choose how often you get the report'))}</div>
         <div class="togs">${['daily', 'weekly', 'monthly'].map(k => `<button data-k="${k}" class="${num(x[k]) ? 'on' : ''}">${esc(t({ daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[k]))}</button>`).join('')}</div></div>`).join('') +
-        `<p class="small muted">${esc(t('Daily: 23:30 · Weekly: {d} night · Monthly: last day of the month.', { d: t(setting('weeklyDay') || 'Thu') }))}</p>`;
+        `<p class="small muted">${esc(schedTxt(false))}</p>`;
       $$('#me .togs button').forEach(b => b.onclick = () => withBusy(b, async () => {
         needOnline(); const card = b.closest('[data-id]'); b.classList.toggle('on');
         const v = {}; $$('.togs button', card).forEach(x => v[x.dataset.k] = x.classList.contains('on') ? 1 : 0);
@@ -1430,7 +1509,7 @@
         <div class="togs" style="margin-top:8px">${['daily', 'weekly', 'monthly', 'lowStock'].map(k => `<button data-k="${k}" class="${num(x[k]) ? 'on' : ''}">${esc(t({ daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', lowStock: 'Low stock' }[k]))}</button>`).join('')}</div>
         <div class="row" style="margin-top:6px"><button class="btn sm text" data-test>${I('send', 'sm')}${esc(t('Send test'))}</button><button class="btn sm text" data-del style="color:var(--red)">${I('trash', 'sm')}${esc(t('Remove'))}</button></div></div></div>`).join('') || `<p class="small muted">${esc(t('Nobody gets email reports yet.'))}</p>`}
         <button class="btn block ghost" id="addR" style="margin-top:8px">${I('plus')}${esc(t('Add person'))}</button>
-        <p class="small muted">${esc(t('Daily: 23:30 · Weekly: {d} night · Monthly: last day of the month. Low stock: at once.', { d: t(setting('weeklyDay') || 'Thu') }))}</p>`;
+        <p class="small muted">${esc(schedTxt(true))}</p>`;
       $$('[data-id] .togs button', box).forEach(b => b.onclick = () => withBusy(b, async () => {
         needOnline(); const row = b.closest('[data-id]'); b.classList.toggle('on');
         const v = {}; $$('.togs button', row).forEach(x => v[x.dataset.k] = x.classList.contains('on') ? 1 : 0);

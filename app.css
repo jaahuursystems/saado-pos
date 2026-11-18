@@ -311,3 +311,18 @@ label.f { display: block; margin-bottom: 12px; } label.f > span { display: block
 .busyov .bx { background: #fff; border-radius: 22px; padding: 22px 30px; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 200px; box-shadow: 0 12px 40px rgba(0, 0, 0, .25); }
 .busyov .bx .spin { width: 34px; height: 34px; border-width: 3.5px; color: var(--navy); }
 .ov.closing { pointer-events: none; }
+/* v1.3 expenses + email times */
+.li.exp { align-items: flex-start; }
+.li.exp .desc { font-size: 14px; color: var(--ink); margin: 2px 0; line-height: 1.35; }
+.li.exp .end { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; white-space: nowrap; }
+.li.exp.gone .name, .li.exp.gone .desc { opacity: .6; }
+.strike { text-decoration: line-through; opacity: .55; }
+.sub.red { color: var(--red); }
+textarea.in { resize: vertical; min-height: 56px; font-family: inherit; line-height: 1.4; padding-top: 10px; }
+.when { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.when:last-of-type { border-bottom: 0; }
+.when > .av { margin-top: 2px; }
+.when b { display: block; margin-bottom: 6px; }
+.when .grid2 { gap: 10px; }
+.when .f { margin-bottom: 0; }
+.when .grid2 { grid-template-columns: 1.7fr 1fr; }

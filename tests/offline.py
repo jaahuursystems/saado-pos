@@ -36,7 +36,7 @@ with sync_playwright() as p:
 
     ctx.set_offline(True); page.evaluate("window.dispatchEvent(new Event('offline'))")
     for route, sel in [('home', '#dash .stat'), ('reports', '#rep .card h3'), ('shift', '#cmp table'), ('insights', '#main .card'), ('emails', '#main .card'), ('refunds', '#hist'), ('users', '#ul .li'), ('purchasing', '#pbody .stats'),
-                       ('expenses', '#el .list'), ('products', '#pl .li'), ('sell', '.tile'), ('customers', '#cl'), ('settings', '#f'), ('guide', '.guide h4'), ('audit', '#al .li'), ('more', '.list .li')]:
+                       ('expenses', '#el .list, #el .empty'), ('products', '#pl .li'), ('sell', '.tile'), ('customers', '#cl'), ('settings', '#f'), ('guide', '.guide h4'), ('audit', '#al .li'), ('more', '.list .li')]:
         page.goto(BASE + '/#' + route); page.wait_for_selector(sel, timeout=3000); page.wait_for_timeout(250)
         assert page.locator('.skel').count() == 0, route + ': placeholder shown offline'
         assert page.locator('.toast.err').count() == 0, route + ': error shown'

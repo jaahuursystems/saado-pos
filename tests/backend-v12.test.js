@@ -89,8 +89,10 @@ t('undo a credit sale lowers the customer debt', () => {
 t('emails: daily to daily people, weekly on the weekly day, staff edit only their own', () => {
   env.call('settings.save', { values: { weeklyDay: 'Mon' } }, H.token);    // 10 Aug 2026 is a Monday
   const acc = env.call('recip.save', { name: 'Accountant', email: 'acc@example.com', monthly: 1 }, H.token).recipient;
+  env.setNow('2026-08-10T20:35:00Z');   // 23:35 in Hargeisa: past the 23:30 default
   const before = env.mail.length; env.ctx.dailyEmails();
-  const sent = env.mail.slice(before);
+  const again = env.mail.length; env.ctx.emailTick(); assert.strictEqual(env.mail.length - again, 0, 'never sent twice');
+  const sent = env.mail.slice(before, again);
   assert.deepStrictEqual(sent.map(m => m.to), ['hussein@example.com', 'hussein@example.com']);
   assert.ok(/Daily report/.test(sent[0].subject) && /Weekly report/.test(sent[1].subject));
   assert.ok(sent[0].htmlBody.includes('Cash taken out (Hussein)') && sent[0].htmlBody.includes('Undone sales'));

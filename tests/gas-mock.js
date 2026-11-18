@@ -63,7 +63,7 @@ function makeEnv(opts = {}) {
   };
   const cache = new Map();
   let clock = opts.now ? new Date(opts.now).getTime() : null;
-  const RealDate = Date;
+  const RealDate = Date; const triggers = [];
   class FakeDate extends RealDate {
     constructor(...a) { if (a.length === 0 && clock !== null) super(clock); else super(...a); }
     static now() { return clock !== null ? clock : RealDate.now(); }
@@ -93,7 +93,10 @@ function makeEnv(opts = {}) {
       newBlob: (c, t, n) => ({ name: n, getAs: () => ({ name: n, setName(x) { this.name = x; return this; } }) })
     },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ content: s, setMimeType() { return this; }, getContent() { return s; } }) },
-    ScriptApp: { getProjectTriggers: () => [], newTrigger: () => { const ch = { timeBased: () => ch, atHour: () => ch, nearMinute: () => ch, everyDays: () => ch, inTimezone: () => ch, create() {} }; return ch; } },
+    ScriptApp: {   // keeps a list of timers so tests can check them
+      getProjectTriggers: () => triggers.map(n => ({ getHandlerFunction: () => n })),
+      deleteTrigger: t => { const i = triggers.indexOf(t.getHandlerFunction()); if (i >= 0) triggers.splice(i, 1); },
+      newTrigger: n => { const ch = { timeBased: () => ch, atHour: () => ch, nearMinute: () => ch, everyDays: () => ch, everyMinutes: () => ch, inTimezone: () => ch, create() { triggers.push(n); } }; return ch; } },
     DriveApp: drive,
     Logger: { log() {} }
   };
@@ -101,7 +104,7 @@ function makeEnv(opts = {}) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'Code.gs'), 'utf8'), ctx, { filename: 'Code.gs' });
   return {
     ctx, sheets, cache, mail, created, rootFolders,
-    setNow: t => { clock = new RealDate(t).getTime(); },
+    setNow: t => { clock = new RealDate(t).getTime(); }, triggers,
     call(action, data, token) {
       const res = ctx.doPost({ postData: { contents: JSON.stringify({ action, data, token }) } });
       return JSON.parse(res.getContent());

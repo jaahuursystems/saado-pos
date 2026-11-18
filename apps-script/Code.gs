@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.2.2';
+var VERSION = '1.3.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -36,7 +36,7 @@ var SCHEMA = {
   SupLedger:  ['id', 'ts', 'date', 'business', 'supplierId', 'type', 'amount', 'paid', 'method', 'items', 'userName', 'note', 'ref'],
   PurchaseOrders: ['id', 'poNo', 'date', 'business', 'supplierId', 'supplierName', 'status', 'items', 'total', 'paid', 'terms', 'notes',
                    'createdTs', 'createdBy', 'sentTs', 'receivedTs', 'receivedBy', 'cancelReason'],
-  Expenses:   ['id', 'ts', 'date', 'business', 'category', 'amount', 'method', 'shiftId', 'ref', 'userName', 'note'],
+  Expenses:   ['id', 'ts', 'date', 'business', 'category', 'amount', 'method', 'shiftId', 'ref', 'userName', 'note', 'currency', 'usdAmount', 'description', 'status', 'undoneBy', 'undoneTs', 'undoReason'],
   Refunds:    ['id', 'ts', 'date', 'business', 'saleId', 'items', 'amount', 'cost', 'method', 'reason', 'status', 'requestedBy', 'decidedBy', 'decidedTs', 'note', 'shiftId'],
   Ingredients:['id', 'name', 'unit', 'stock', 'lowLevel', 'cost', 'active', 'updatedAt'],
   IngLog:     ['id', 'ts', 'date', 'ingredientId', 'name', 'type', 'qty', 'userName', 'note'],
@@ -69,18 +69,24 @@ var DEFAULT_SETTINGS = {
   shopName:       ['Saado Shop', ''],
   foodName:       ['Saado Fast Food', ''],
   shopPhone:      ['', 'Shown on supplier orders'],
-  ownerWhatsApp:  ['', 'Number for the daily summary, e.g. 252634000000'],
   food_enabled:   ['1', 'Fast Food open (1) or closed (0). Closed hides everything Fast Food; nothing is deleted'],
   lateMin:        ['10', 'Minutes after the shift start that count as late'],
-  lowStockEmail:  ['1', 'Email at once when an item reaches its warning level (1/0)'],
-  weeklyDay:      ['Thu', 'Day the weekly email report is sent (night)'],
+  lowStockEmail:  ['1', 'Low-stock emails on (1) or off (0)'],
+  lowStockMode:   ['now', 'Low-stock email: now = at once, daily = one list a day'],
+  lowStockTime:   ['08:00', 'Time of the daily low-stock list'],
+  emailDailyTime: ['23:30', 'Time of the daily report (before 12:00 = report on yesterday)'],
+  weeklyDay:      ['Thu', 'Day the weekly email report is sent'],
+  emailWeeklyTime:['23:30', 'Time of the weekly report (before 12:00 = the 7 days up to yesterday)'],
+  monthlyWhen:    ['last', 'Monthly report: last = last day of the month, first = 1st of the next month'],
+  emailMonthlyTime:['23:30', 'Time of the monthly report'],
   appUrl:         ['https://jaahuursystems.github.io/saado-pos/', 'App link used in emails'],
   dataVersion:    ['1', 'Changes after a reset (do not edit)'],
   archivedUntil:  ['', 'Data before this date is in the Archive (do not edit)'],
   archiveLinks:   ['[]', 'Archive sheets (do not edit)'],
-  permsV2:        ['0', 'Internal (do not edit)']
+  permsV2:        ['0', 'Internal (do not edit)'],
+  emailSent:      ['{}', 'When each email was last sent (do not edit)']
 };
-var PROTECTED_SETTINGS = { dataVersion: 1, archivedUntil: 1, archiveLinks: 1, permsV2: 1 };
+var PROTECTED_SETTINGS = { dataVersion: 1, archivedUntil: 1, archiveLinks: 1, permsV2: 1, emailSent: 1 };
 
 var PERMS = ['viewReports', 'viewProfit', 'viewStock', 'changePrices', 'manageProducts', 'discount', 'customers', 'suppliers',
              'undoSales', 'cashOut', 'voidSales', 'deleteProducts', 'deleteCustomers', 'deleteSuppliers', 'viewInsights', 'emailReports',
@@ -923,19 +929,41 @@ var ACTIONS = {
   'admin.archive': function (u, d) { needOwner_(u); return archive_(u, d.cutoff, false); },
 
   /* ---------- expenses ---------- */
+  // Expenses can be paid in shillings or dollars. "amount" is always kept in SH (dollars × rate) so reports add up;
+  // the dollars are kept in usdAmount and come out of the dollar drawer.
   'exp.create': function (u, d) {
     need_(u, 'expenses');
     if (exists_('Expenses', d.id)) return { ok: true, dup: true };
     needBiz_(u, d.business);
-    var amt = num_(d.amount); if (amt <= 0) throw new Error('Enter an amount');
-    var e = addExpense_(u, d.business, str_(d.category, 40) || 'Other', amt, d.method, '', str_(d.note), d.id);
+    var usd = d.currency === 'USD', amt = num_(d.amount); if (amt <= 0) throw new Error('Enter an amount');
+    var cat = str_(d.category, 40) || 'Other', desc = str_(d.description, 200);
+    if (cat === 'Other' && !desc) throw new Error('Write what the money was for');
+    var shAmt = usd ? Math.round(amt * rate_()) : amt;
+    var e = addExpense_(u, d.business, cat, shAmt, d.method, '', str_(d.note), d.id,
+                        { currency: usd ? 'USD' : 'SH', usdAmount: usd ? Math.round(amt * 100) / 100 : '', description: desc, status: 'done' });
     return { ok: true, expense: clean_(e) };
   },
 
   'exp.list': function (u, d) {
+    need_(u, 'expenses');
     var biz = bizFilter_(u, d.business), from = d.from || today_(), to = d.to || today_();
-    var list = table_('Expenses').rows.filter(function (e) { return biz.indexOf(e.business) >= 0 && e.date >= from && e.date <= to && (can_(u, 'viewReports') || e.userName === u.name); });
-    return { ok: true, expenses: list.reverse().map(clean_) };
+    var list = recent_('Expenses', from).filter(function (e) { return biz.indexOf(e.business) >= 0 && e.date >= from && e.date <= to && (can_(u, 'viewReports') || e.userName === u.name); });
+    return { ok: true, expenses: list.reverse().map(clean_), today: today_() };
+  },
+
+  // Undo an expense: only on the same day it was written, by the person who wrote it or an owner. The row stays, marked "undone".
+  'exp.undo': function (u, d) {
+    need_(u, 'expenses');
+    var e = find_('Expenses', d.id); if (!e) throw new Error('Expense not found (it may still be syncing)');
+    if (e.status === 'undone') return { ok: true, dup: true };
+    if (e.userName !== u.name && !isOwner_(u)) throw new Error('NOPERM: only the person who wrote it or the owner can undo it');
+    if (e.date !== today_()) throw new Error('Expenses can only be undone on the same day');
+    if (e.ref) throw new Error('This came from a purchase order. Change it there.');
+    var reason = str_(d.reason, 120); if (!reason) throw new Error('Choose a reason');
+    e.status = 'undone'; e.undoneBy = u.name; e.undoneTs = nowIso_(); e.undoReason = reason;
+    update_('Expenses', e);
+    audit_(u, 'exp.undo', { cat: e.category, amount: e.amount, reason: reason });
+    return { ok: true, expense: clean_(e) };
   },
 
   /* ---------- refunds ---------- */
@@ -1322,10 +1350,12 @@ function receivePo_(u, po, s, lines) {
   audit_(u, 'po.receive', { po: po.poNo, total: total });
 }
 
-function addExpense_(u, biz, cat, amt, method, ref, note, id) {
+function addExpense_(u, biz, cat, amt, method, ref, note, id, more) {
   var shift = openShift_(u, biz);
   var e = { id: id || uid_('EX'), ts: nowIso_(), date: today_(), business: biz, category: cat, amount: num_(amt),
-            method: PAY_METHODS.indexOf(method) >= 0 ? method : 'cash', shiftId: shift ? shift.id : '', ref: ref || '', userName: u.name, note: note || '' };
+            method: PAY_METHODS.indexOf(method) >= 0 ? method : 'cash', shiftId: shift ? shift.id : '', ref: ref || '', userName: u.name, note: note || '',
+            currency: 'SH', usdAmount: '', description: '', status: 'done' };
+  if (more) Object.keys(more).forEach(function (k) { e[k] = more[k]; });
   insert_('Expenses', e);
   audit_(u, 'expense', { cat: cat, amount: e.amount, method: e.method });
   return e;
@@ -1340,7 +1370,7 @@ function saleMoney_(x) {
   return { sh: num_(x.total), usd: 0 };
 }
 function shiftTotals_(s) {
-  var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0,
+  var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, expCashUSD: 0, expZaadUSD: 0, expEdUSD: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0,
             cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, undoneCount: 0 };
   var key = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }, inKey = { cash: 'cash', zaad: 'zaad', edahab: 'ed' };
   var since = String(s.date || dateOf_(s.openTs)).slice(0, 10);
@@ -1354,16 +1384,19 @@ function shiftTotals_(s) {
     t[k + 'InSH'] += m.sh; t[k + 'InUSD'] += m.usd;
   });
   recent_('CustLedger', since).forEach(function (x) { if (x.shiftId === s.id && x.type === 'payment' && key[x.method]) t['custPay' + key[x.method]] += num_(x.amount); });
-  recent_('Expenses', since).forEach(function (x) { if (x.shiftId === s.id && key[x.method]) t['exp' + key[x.method]] += num_(x.amount); });
+  recent_('Expenses', since).forEach(function (x) {
+    if (x.shiftId !== s.id || !key[x.method] || x.status === 'undone') return;
+    if (x.currency === 'USD') t['exp' + key[x.method] + 'USD'] += num_(x.usdAmount); else t['exp' + key[x.method]] += num_(x.amount);
+  });
   recent_('Refunds', since).forEach(function (x) { if (x.shiftId === s.id && x.status === 'approved' && key[x.method]) t['ref' + key[x.method]] += num_(x.amount); });
   recent_('CashMoves', since).forEach(function (x) { if (x.shiftId === s.id) t[x.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num_(x.amount); });
   var rate = num_(s.rate) || rate_(), r2 = function (v) { return Math.round(v * 100) / 100; };
   t.eCashSH = num_(s.openCash) + t.cashInSH + t.custPayCash - t.expCash - t.refCash - t.cashOutSH;
-  t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD);
+  t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD - t.expCashUSD);
   t.eZaadSH = num_(s.openZaadSH) + t.zaadInSH + t.custPayZaad - t.expZaad - t.refZaad;
-  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD);
+  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD - t.expZaadUSD);
   t.eEdSH = num_(s.openEdSH) + t.edInSH + t.custPayEd - t.expEd - t.refEd;
-  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD);
+  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD - t.expEdUSD);
   t.totalExpSH = t.eCashSH + t.eZaadSH + t.eEdSH;
   t.totalExpUSD = r2(t.eCashUSD + t.eZaadUSD + t.eEdUSD);
   // same money counted in SH (older screens and reports use these)
@@ -1402,6 +1435,7 @@ function report_(u, d) {
   });
   var expCats = {};
   table_('Expenses').rows.filter(inR).forEach(function (e) {
+    if (e.status === 'undone') return;
     var b = byBiz[e.business];
     if (e.category === 'Supplier purchases') b.stockPurchases += num_(e.amount); else b.expenses += num_(e.amount);
     var k = e.category + '|' + e.business; expCats[k] = expCats[k] || { category: e.category, business: e.business, amount: 0 }; expCats[k].amount += num_(e.amount);
@@ -1462,7 +1496,7 @@ function onOpen() {
     .addItem('1. Run setup (safe to repeat)', 'setup')
     .addItem('2. Back up now', 'backupNow')
     .addItem('3. Reset an owner PIN (shows new PIN)', 'emergencyResetOwnerPin')
-    .addItem('4. Send email reports now (test)', 'dailyEmails')
+    .addItem('4. Send email reports now (test)', 'sendAllReportsNow')
     .addToUi();
 }
 
@@ -1500,7 +1534,9 @@ function setup() {
   }
   var trig = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   if (trig.indexOf('dailyBackup') < 0) ScriptApp.newTrigger('dailyBackup').timeBased().atHour(3).everyDays(1).inTimezone(TZ).create();
-  if (trig.indexOf('dailyEmails') < 0) ScriptApp.newTrigger('dailyEmails').timeBased().atHour(23).nearMinute(30).everyDays(1).inTimezone(TZ).create();
+  // v1.3: one small timer every 15 minutes sends emails at the times chosen in Settings (replaces the fixed 23:30 timer)
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'dailyEmails') ScriptApp.deleteTrigger(t); });
+  if (trig.indexOf('emailTick') < 0) ScriptApp.newTrigger('emailTick').timeBased().everyMinutes(15).create();
   // v1.2: employees get "undo own sales" and "take cash out" by default (once)
   if (setting_('permsV2') !== '1') {
     table_('Users').rows.forEach(function (x) {
@@ -1648,31 +1684,74 @@ function emailWrap_(title, inner) {
     '<h2 style="color:#003366;margin:0 0 12px;font-size:20px">' + esc_(title) + '</h2>' + inner +
     '<p style="color:#888;font-size:12px;margin-top:24px">Open the app: <a href="' + esc_(url) + '">' + esc_(url) + '</a><br>Change how often you get this: Saado POS → More → My email reports</p></div>';
 }
-function sendLowStock_(items) {
+function sendLowStock_(items, scheduled) {
   if (!isOn_(setting_('lowStockEmail'))) return;
+  if (!scheduled && setting_('lowStockMode') === 'daily') return;   // daily mode: the list goes out once a day instead
   var rs = recipientsFor_('lowStock'); if (!rs.length) return;
   var subj = items.length === 1 ? 'Low stock: ' + items[0].name + ' — ' + items[0].stock + ' left' : 'Low stock: ' + items.length + ' items need ordering';
   var rows = items.map(function (x) { return '<tr><td style="padding:8px;border-bottom:1px solid #eee">' + esc_(x.name) + '</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#C62828;font-weight:bold">' + fmt_(x.stock) + ' left</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#888">warn at ' + fmt_(x.lowStock) + '</td></tr>'; }).join('');
   var html = emailWrap_('Low stock', '<table style="width:100%;border-collapse:collapse;font-size:15px">' + rows + '</table><p>Make a purchase order in Saado POS → More → Purchasing → "Add low-stock items".</p>');
   MailApp.sendEmail({ to: rs.map(function (r) { return r.email; }).join(','), subject: subj, htmlBody: html, name: 'Saado POS' });
 }
-function dailyEmails() {
-  T_ = {};
-  var now = new Date(), wd = Utilities.formatDate(now, TZ, 'EEE'), tomorrow = Utilities.formatDate(new Date(now.getTime() + 86400000), TZ, 'dd');
-  sendReport_('daily');
-  if (wd === String(setting_('weeklyDay') || 'Thu')) sendReport_('weekly');
-  if (tomorrow === '01') sendReport_('monthly');
+/* ---------- email schedule ----------
+   A small timer runs every 15 minutes (made by setup) and sends whatever is due, using the times the owner picked in Settings.
+   Times before 12:00 report on the period that ended yesterday (e.g. a 08:00 daily email = yesterday's full day). */
+function emailClock_() {
+  var now = new Date();
+  return { td: today_(), hm: Utilities.formatDate(now, TZ, 'HH:mm'), wd: Utilities.formatDate(now, TZ, 'EEE') };
 }
-function sendReport_(kind, only, test) {
+function hm_(v, dflt) { v = String(v || ''); return /^\d{2}:\d{2}$/.test(v) ? v : dflt; }
+// The period an email covers when it is sent on day td at time hm.
+function emailPeriod_(kind, td, hm) {
+  var end = hm < '12:00' ? addDaysIso_(td, -1) : td;
+  if (kind === 'daily') return { from: end, to: end };
+  if (kind === 'weekly') return { from: addDaysIso_(end, -6), to: end };
+  if (setting_('monthlyWhen') === 'first') { var pm = shiftMonth_(td.slice(0, 7), -1); return { from: pm + '-01', to: pm + '-' + ('0' + daysIn_(pm)).slice(-2) }; }
+  return { from: td.slice(0, 8) + '01', to: td };
+}
+function emailTick() {
+  var lock = LockService.getScriptLock(); if (!lock.tryLock(20000)) return;
+  try {
+    T_ = {};
+    var c = emailClock_(), sent = {}; try { sent = JSON.parse(setting_('emailSent') || '{}'); } catch (e) {}
+    var due = [], dT = hm_(setting_('emailDailyTime'), '23:30'), wT = hm_(setting_('emailWeeklyTime'), '23:30'), mT = hm_(setting_('emailMonthlyTime'), '23:30');
+    if (c.hm >= dT && sent.daily !== c.td) due.push(['daily', dT]);
+    if (c.wd === String(setting_('weeklyDay') || 'Thu') && c.hm >= wT && sent.weekly !== c.td) due.push(['weekly', wT]);
+    var lastDay = c.td.slice(8) === ('0' + daysIn_(c.td.slice(0, 7))).slice(-2), first = c.td.slice(8) === '01';
+    if ((setting_('monthlyWhen') === 'first' ? first : lastDay) && c.hm >= mT && sent.monthly !== c.td) due.push(['monthly', mT]);
+    var low = setting_('lowStockMode') === 'daily' && isOn_(setting_('lowStockEmail')) && c.hm >= hm_(setting_('lowStockTime'), '08:00') && sent.low !== c.td;
+    if (!due.length && !low) return;
+    // mark first, so a slow send is never repeated by the next run
+    due.forEach(function (x) { sent[x[0]] = c.td; }); if (low) sent.low = c.td;
+    setSetting_('emailSent', JSON.stringify(sent));
+    due.forEach(function (x) { try { sendReport_(x[0], null, false, emailPeriod_(x[0], c.td, x[1])); } catch (e) { console.error(e); } });
+    if (low) { var items = lowStockNow_(); if (items.length) sendLowStock_(items, true); }
+  } finally { lock.releaseLock(); }
+}
+function lowStockNow_() {
+  return table_('Products').rows.filter(function (p) {
+    return isOn_(p.active) && !isOn_(p.deleted) && p.business === 'shop' && num_(p.lowStock) > 0 && num_(p.stock) <= num_(p.lowStock);
+  }).map(function (p) { return { name: p.name, stock: num_(p.stock), lowStock: num_(p.lowStock) }; });
+}
+// Old timer name (from v1.2.0) still works.
+function dailyEmails() { emailTick(); }
+// Menu: send every report right now (to check they arrive).
+function sendAllReportsNow() {
+  T_ = {}; var c = emailClock_();
+  ['daily', 'weekly', 'monthly'].forEach(function (k) { sendReport_(k, null, true, emailPeriod_(k, c.td, c.hm)); });
+  var items = lowStockNow_(); if (items.length) sendLowStock_(items, true);
+}
+function sendReport_(kind, only, test, period) {
   var rs = only || recipientsFor_(kind); if (!rs.length) return 0;
-  var td = today_(), from = kind === 'daily' ? td : kind === 'weekly' ? addDaysIso_(td, -6) : td.slice(0, 8) + '01';
-  var label = kind === 'daily' ? Utilities.formatDate(new Date(), TZ, 'EEEE d MMMM') : kind === 'weekly' ? from + ' to ' + td : monthLabel_(td);
+  if (!period) { var c = emailClock_(); period = emailPeriod_(kind, c.td, hm_(setting_(kind === 'daily' ? 'emailDailyTime' : kind === 'weekly' ? 'emailWeeklyTime' : 'emailMonthlyTime'), '23:30')); }
+  var from = period.from, to = period.to;
+  var label = kind === 'daily' ? Utilities.formatDate(new Date(to + 'T12:00:00Z'), 'UTC', 'EEEE d MMMM') : kind === 'weekly' ? from + ' to ' + to : monthLabel_(from);
   var title = (kind === 'daily' ? 'Daily report — ' : kind === 'weekly' ? 'Weekly report — ' : 'Monthly report — ') + label;
   var owner = table_('Users').rows.filter(function (x) { return x.role === 'owner' && isOn_(x.active); })[0];
   rs.forEach(function (r) {
     var viewer = r.userId ? find_('Users', r.userId) : owner;
     if (!viewer || !isOn_(viewer.active)) viewer = owner;
-    var rep = report_(viewer, { business: 'all', from: from, to: td });
+    var rep = report_(viewer, { business: 'all', from: from, to: to });
     MailApp.sendEmail({ to: r.email, subject: (test ? '[Test] ' : '') + 'Saado · ' + title, htmlBody: reportEmailHtml_(title, rep, kind), name: 'Saado POS' });
   });
   return rs.length;
@@ -1811,7 +1890,7 @@ function monthlySummary_(sales, expenses, refunds) {
   var m = {}, row = function (mon, b) { var k = mon + '|' + b; return m[k] || (m[k] = { month: mon, business: b, count: 0, sales: 0, refunds: 0, refundCost: 0, netSales: 0, cost: 0, expenses: 0, profit: 0, cash: 0, zaad: 0, edahab: 0, credit: 0 }); };
   sales.forEach(function (x) { if (GONE[x.status]) return; var r = row(x.date.slice(0, 7), x.business); r.count++; r.sales += num_(x.total); r.cost += num_(x.cost); r[x.method] = (r[x.method] || 0) + num_(x.total); });
   refunds.forEach(function (x) { if (x.status !== 'approved') return; var r = row(dateOf_(x.decidedTs || x.ts).slice(0, 7), x.business); r.refunds += num_(x.amount); r.refundCost += num_(x.cost); });
-  expenses.forEach(function (x) { if (x.category === 'Supplier purchases') return; row(x.date.slice(0, 7), x.business).expenses += num_(x.amount); });
+  expenses.forEach(function (x) { if (x.category === 'Supplier purchases' || x.status === 'undone') return; row(x.date.slice(0, 7), x.business).expenses += num_(x.amount); });
   return Object.keys(m).sort().map(function (k) { var r = m[k]; r.netSales = r.sales - r.refunds; r.profit = r.netSales - (r.cost - r.refundCost) - r.expenses; r.updatedAt = nowIso_(); return r; });
 }
 function writeTab_(ss, name, headers, rows) {

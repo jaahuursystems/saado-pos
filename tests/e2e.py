@@ -73,9 +73,15 @@ with sync_playwright() as p:
     page.screenshot(path=SHOTS + '04-newpin.png'); page.click('.ft .btn.primary'); step('owner creates a user and sees the new PIN once')
 
     page.goto(BASE + '/#settings'); page.wait_for_selector('[name=usdRate]')
-    page.fill('[name=ownerWhatsApp]', '252634000000')
+    assert page.locator('[name=ownerWhatsApp]').count() == 0
+    page.select_option('[name=emailDailyTime]', '08:00'); page.select_option('[name=weeklyDay]', 'Sat'); page.select_option('[name=monthlyWhen]', 'first')
+    page.select_option('#lsm', 'daily'); assert page.is_visible('[name=lowStockTime]'); page.select_option('[name=lowStockTime]', '07:30')
     page.fill('#otn', 'Delivery'); page.click('#ota')
-    page.click('#f button.gold.lg'); page.wait_for_selector('.toast.ok'); step('owner saves settings (+ order type)')
+    page.screenshot(path=SHOTS + '05b-email-times.png', full_page=True)
+    page.click('#f button.gold.lg'); page.wait_for_selector('.toast.ok')
+    st = {r[0]: r[1] for r in sheet('Settings')}
+    assert st['emailDailyTime'] == '08:00' and st['weeklyDay'] == 'Sat' and st['monthlyWhen'] == 'first' and st['lowStockMode'] == 'daily' and st['lowStockTime'] == '07:30' and st['lowStockEmail'] == '1', st
+    step('owner saves settings: email times (daily 08:00, weekly Sat, monthly 1st, low stock once a day 07:30) + order type')
     logout(page)
 
     # ---------- Raxma, shop employee ----------
@@ -138,8 +144,19 @@ with sync_playwright() as p:
     assert sheet('Customers')[0][4] in (32000, '32000'); page.screenshot(path=SHOTS + '09-customers.png'); step('partial debt payment (balance 32,000)')
 
     # expense
-    page.goto(BASE + '/#expenses'); page.click('[data-name=category] button[data-v="Deliveries"]'); page.fill('[name=amount]', '5000'); page.click('#f button.gold')
-    page.wait_for_selector('.toast.ok'); step('cash expense recorded')
+    page.goto(BASE + '/#expenses'); page.wait_for_selector('#ecat')
+    page.click('#f button.gold'); page.wait_for_selector('.toast.err:has-text("Dooro nooca")')   # no category chosen
+    page.select_option('#ecat', 'Deliveries'); page.fill('[name=amount]', '5000'); page.fill('[name=description]', 'Gaarsiinta bariiska'); page.click('#f button.gold')
+    page.wait_for_selector('.toast.ok'); step('cash expense recorded (category from the dropdown + explanation)')
+    page.select_option('#ecat', 'Other'); page.click('#ecur button[data-v="USD"]'); page.fill('[name=amount]', '2'); page.click('#f button.gold')
+    page.wait_for_selector('.toast.err'); assert page.input_value('[name=amount]') == '2'   # "Other" needs an explanation
+    page.fill('[name=description]', 'Bajaj'); page.fill('[name=note]', 'test'); page.click('#f button.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    page.goto(BASE + '/#more'); page.goto(BASE + '/#expenses'); page.wait_for_selector('#el .li:has-text("Bajaj") [data-undo]'); page.wait_for_timeout(300)
+    page.screenshot(path=SHOTS + '09b-expenses.png', full_page=True)
+    page.click('#el .li:has-text("Bajaj") [data-undo]'); page.click('#rs .chip[data-r="Entered twice"]'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.toast.ok')
+    ex = [r for r in sheet('Expenses') if 'Bajaj' in r]; assert ex and 'undone' in ex[0] and 'USD' in ex[0], ex
+    page.wait_for_selector('#el .li.gone:has-text("Bajaj")'); step('$2 expense saved in USD, then undone the same day (kept, marked undone)')
 
     # ---------- refund request ----------
     page.goto(BASE + '/#refunds'); page.click('#req'); page.wait_for_selector('#sl .li')
@@ -233,7 +250,7 @@ with sync_playwright() as p:
     page.click('#sv'); page.wait_for_selector('.sheet:has-text("1 products corrected")'); step('stock count corrects stock')
     # ---------- v1.2 owner tools ----------
     page.goto(BASE + '/#insights'); page.wait_for_selector('.bars, .card h3'); page.wait_for_timeout(500); page.screenshot(path=SHOTS + '23-insights.png', full_page=True); step('insights page')
-    page.goto(BASE + '/#home'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(400); assert 'Raxma' in page.inner_text('#main'); page.screenshot(path=SHOTS + '24-home-v12.png', full_page=True); step('home shows shifts today / undone / cash out')
+    page.goto(BASE + '/#home'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(400); assert 'Raxma' in page.inner_text('#main'); assert page.locator('#wa').count() == 0 and 'WhatsApp' not in page.inner_text('#main'); page.screenshot(path=SHOTS + '24-home-v12.png', full_page=True); step('home shows shifts today / undone / cash out')
     page.goto(BASE + '/#settings'); page.wait_for_selector('#emc'); page.wait_for_timeout(300); page.screenshot(path=SHOTS + '25-settings.png', full_page=True)
     r = page.evaluate("""async () => { await App.api('recip.save', {name:'Hussein', email:'owner@example.com', daily:true, weekly:true, monthly:false}); const l = await App.api('recip.list', {}); await App.api('recip.test', {id: l.recipients[0].id}); return l.recipients.length }""")
     assert r == 1; step('email recipient added + test email sent')
