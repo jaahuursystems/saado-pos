@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.2.1';
+var VERSION = '1.2.2';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -340,7 +340,7 @@ function login_(d) {
   if (!bizList_(u).length) throw new Error('CLOSED: Fast Food is closed. Ask the owner.');
   checkHours_(u, null, new Date());
   var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
-  cache.put('tok_' + token, u.id, TOKEN_HOURS * 3600);
+  cache.put('tok_' + token, u.id + '|' + Date.now(), TOKEN_HOURS * 3600);
   audit_(u, 'login', '');
   var b = boot_(u, {});
   b.token = token;
@@ -350,8 +350,11 @@ function login_(d) {
 
 function auth_(token) {
   if (!token) throw new Error('AUTH: please log in');
-  var id = CacheService.getScriptCache().get('tok_' + token);
-  if (!id) throw new Error('AUTH: session expired, please log in again');
+  var cache = CacheService.getScriptCache(), v = cache.get('tok_' + token);
+  if (!v) throw new Error('AUTH: session expired, please log in again');
+  // A session stays alive while it is used: every 20 minutes of use gives it another full 6 hours (long Fast Food shifts).
+  var parts = String(v).split('|'), id = parts[0], at = Number(parts[1] || 0), nowMs = Date.now();
+  if (nowMs - at > 20 * 60 * 1000) cache.put('tok_' + token, id + '|' + nowMs, TOKEN_HOURS * 3600);
   var u = find_('Users', id);
   if (!u || !isOn_(u.active)) throw new Error('AUTH: account disabled');
   if (!bizList_(u).length) throw new Error('AUTH: Fast Food is closed');

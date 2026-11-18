@@ -3,7 +3,7 @@ const assert = require('assert');
 const { makeEnv } = require('./gas-mock');
 let passed = 0;
 function t(name, f) { try { f(); passed++; console.log('  ok  ' + name); } catch (e) { console.log('  FAIL ' + name + '\n       ' + (e.stack || e).toString().split('\n').slice(0, 4).join('\n       ')); process.exitCode = 1; } }
-const env = makeEnv({ now: '2026-08-10T13:00:00Z' });
+const env = makeEnv({ now: '2026-08-10T13:00:00Z', realCache: true });
 const pins = {}; env.ctx.setup().split('\n').forEach(l => { const m = l.match(/^(\w+): (\d{4})$/); if (m) pins[m[1]] = m[2]; });
 const ids = {}; env.call('names').users.forEach(u => ids[u.name] = u.id);
 const H = env.call('login', { userId: ids.Hussein, pin: pins.Hussein });
@@ -39,4 +39,10 @@ t('closing the shift uses the same numbers', () => {
   const c = env.call('shift.close', { id: sh.id, closeCash: 19000 }, R.token); assert.ok(c.ok, c.error);
   assert.strictEqual(c.shift.diffAll, 0);
 });
-console.log(passed + ' passed');
+t('a session stays alive while it is used (long Fast Food shift), and ends after 6 hours of no use', () => {
+  const L = env.call('login', { userId: ids.Hussein, pin: pins.Hussein }); assert.ok(L.ok, L.error);
+  const at = h => env.setNow(new Date(Date.parse('2026-08-10T14:00:00Z') + h * 3600e3).toISOString());
+  for (const h of [1, 3, 5, 7, 9]) { at(h); const r = env.call('boot', {}, L.token); assert.ok(r.ok, h + 'h: ' + r.error); }
+  at(15.5); const r = env.call('boot', {}, L.token); assert.ok(!r.ok && /AUTH/.test(r.error), JSON.stringify(r).slice(0, 80));
+});
+console.log(passed + ' passed (with session test)');

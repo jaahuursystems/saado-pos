@@ -56,13 +56,13 @@ with sync_playwright() as p:
     page.click('.list [data-r="products"]')
     for name, code, price, cost, stock in [('Coca-Cola 330ml', '5449000000996', '3200', '2500', '48'), ('Bariis 5kg', '6001234567890', '52000', '45000', '4'), ('Colgate 100ml', '8714789', '4500', '3500', '12')]:
         page.click('.fab'); page.fill('[name=name]', name); page.fill('[name=barcode]', code); page.fill('[name=price]', price); page.fill('[name=cost]', cost); page.fill('[name=stock]', stock)
-        page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")')
+        page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")'); page.wait_for_selector('.ov', state='detached')
     page.screenshot(path=SHOTS + '03-products.png'); step('owner adds 3 shop products')
     page.click('.bizswitch button[data-b="food"]'); page.wait_for_timeout(300)
     page.goto(BASE + '/#products'); page.wait_for_selector('.fab')
     for name, price, cost in [('Digaag buuxa', '60000', '35000'), ('Chips', '15000', '6000'), ('Shawarma', '25000', '12000')]:
         page.click('.fab'); page.fill('[name=name]', name); page.fill('[name=price]', price); page.fill('[name=cost]', cost)
-        page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")')
+        page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")'); page.wait_for_selector('.ov', state='detached')
     step('owner adds 3 fast food menu items')
     page.click('.bizswitch button[data-b="shop"]')
 
@@ -247,6 +247,19 @@ with sync_playwright() as p:
     page.evaluate("""async () => { await App.api('settings.save', {values:{food_enabled:'1'}}) }"""); step('Fast Food switched off: Sacad hidden and blocked; switched back on')
     page.set_viewport_size({'width': 1280, 'height': 900}); page.goto(BASE + '/#home'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(400)
     page.screenshot(path=SHOTS + '16-laptop.png'); step('laptop layout')
+    # ---------- log out while slow requests are still running: clear wait screen, no "session ended" message ----------
+    page.set_viewport_size({'width': 393, 'height': 851})
+    urllib.request.urlopen(BASE + '/__delay?ms=2000')
+    page.goto(BASE + '/#more'); page.wait_for_selector('.list [data-r="logout"]')
+    page.evaluate("App.prefetch(); App.refresh(true)")
+    page.wait_for_timeout(200); page.click('.list [data-r="logout"]'); page.wait_for_selector('.busyov .spin'); page.screenshot(path=SHOTS + '28-logout.png')
+    page.wait_for_selector('#pad'); page.wait_for_timeout(4500)
+    assert page.locator('.toast').count() == 0, page.inner_text('#toasts'); assert page.locator('#pad').count() == 1
+    assert page.evaluate("localStorage.getItem('saado_session')") is None
+    urllib.request.urlopen(BASE + '/__delay?ms=0')
+    step('log out: "Logging out…" screen, then login; late answers are ignored (no "session ended")')
+    login(page, 'Hussein'); page.wait_for_selector('#nav:not(.hidden)'); page.wait_for_timeout(500); assert page.locator('.toast.warn').count() == 0
+    step('log back in straight away works')
 
     b.close()
 

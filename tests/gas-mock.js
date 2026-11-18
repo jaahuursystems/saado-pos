@@ -81,7 +81,9 @@ function makeEnv(opts = {}) {
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, getUi: () => { throw new Error('no ui'); },
       create: name => { const id = 'ARCH' + Object.keys(created).length; const x = makeSS(id); x.name = name; x.insertSheet('Sheet1'); created[id] = x; return x; } },
     MailApp: { sendEmail: o => mail.push(o), getRemainingDailyQuota: () => 100 },
-    CacheService: { getScriptCache: () => ({ get: k => cache.has(k) ? cache.get(k) : null, put: (k, v) => cache.set(k, String(v)), remove: k => cache.delete(k) }) },
+    CacheService: { getScriptCache: () => ({   // values expire like the real cache (uses the test clock)
+      get: k => { const e = cache.get(k); if (!e) return null; if (opts.realCache && e.until && FakeDate.now() > e.until) { cache.delete(k); return null; } return e.v; },
+      put: (k, v, ttl) => cache.set(k, { v: String(v), until: FakeDate.now() + (ttl || 600) * 1000 }), remove: k => cache.delete(k) }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },

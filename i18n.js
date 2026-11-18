@@ -773,6 +773,9 @@ window.SO = {
   // added in v1.2.1
   "Logging in… please wait": "Waa la gelayaa… fadlan sug",
   "Still checking — the internet is slow. Please wait.": "Weli waa la hubinayaa — internet-ku waa gaabis. Fadlan sug.",
+  "Logging out…": "Waa laga baxayaa…",
+  "Please wait": "Fadlan sug",
+  "For safety, please type your PIN again.": "Ammaan awgeed, fadlan mar kale geli PIN-kaaga.",
   // messages that come from the server
   'Cart is empty': 'Dambiishu waa madhan tahay',
   'Choose a payment method': 'Dooro habka lacag-bixinta',

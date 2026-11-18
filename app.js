@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.2.1';
+  const APP_VERSION = '1.2.2';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -84,9 +84,10 @@
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = setTimeout(() => ctl && ctl.abort(), opts.timeout || 45000);
     let res;
+    const tok = S.token;   // the session this request belongs to
     progress(1);
     try {
-      res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, data: data || {}, token: S.token }), redirect: 'follow', signal: ctl ? ctl.signal : undefined });
+      res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, data: data || {}, token: tok }), keepalive: action === 'logout', redirect: 'follow', signal: ctl ? ctl.signal : undefined });
     } catch (e) {
       const aborted = e && e.name === 'AbortError';
       netFails++;
@@ -101,9 +102,15 @@
       throw new AppError(/<html|<!DOCTYPE/i.test(text) ? t('The script answered with a Google page instead of data. The deployment access must be "Anyone" and the URL must end with /exec.')
         : t('The script sent an unexpected answer (HTTP {s}).', { s: res.status }), 'server');
     }
+    // An answer that arrives after this person logged out (or someone else logged in) is ignored quietly.
+    if (tok !== S.token && action !== 'login' && action !== 'names') throw new AppError('', 'stale');
     if (!j.ok) {
-      if (/^AUTH/.test(j.error || '')) { sessionEnded(); }
+      if (/^AUTH/.test(j.error || '')) { if (!S.loggingOut) sessionEnded(); throw new AppError('', 'stale'); }
       throw new AppError(friendly(j.error), 'app');
+    }
+    if (tok && S.token === tok && !S.offlineSession) {   // the server keeps an active session alive: move our end time too
+      const exp = Date.now() + 5.5 * 3600 * 1000;
+      if (exp - S.expires > 10 * 60 * 1000) { S.expires = exp; if (S.user) LS.set('session', { token: tok, expires: exp, user: S.user }); }
     }
     return j;
   }
@@ -201,15 +208,27 @@
     } catch (e) { if (!quiet) toast(e.message, 'err'); return false; }
   }
   function sessionEnded() {
+    if (!S.token) return;
     S.token = null; LS.del('session');
-    setTimeout(() => { if (!document.querySelector('.login')) { toast(t('Your session ended. Please log in again.'), 'warn', 5000); showLogin(); } }, 10);
+    setTimeout(() => { if (!document.querySelector('.login')) { showLogin(); setTimeout(() => toast(t('For safety, please type your PIN again.'), 'warn', 5000), 50); } }, 10);
   }
+  // Log out at once on this phone (with a clear "Logging out…" screen); the server is told in the background.
   async function logout() {
+    if (S.loggingOut) return;
     const waiting = S.queue.filter(o => o.userId === S.user.id).length;
     if (waiting && !(await confirmBox(t('{n} items are not sent yet. They stay on this phone and will be sent when you log in again. Log out?', { n: waiting })))) return;
-    try { if (S.online) await api('logout', {}); } catch (e) {}
-    S.token = null; S.cart = []; LS.del('session');   // the per-user copy stays so this person can still unlock offline later
-    showLogin();
+    S.loggingOut = true;
+    const ov = document.createElement('div'); ov.className = 'busyov';
+    ov.innerHTML = `<div class="bx"><span class="spin"></span><b>${esc(t('Logging out…'))}</b><span class="small muted">${esc(t('Please wait'))}</span></div>`;
+    document.body.appendChild(ov);
+    try {
+      if (S.online && S.token && !S.offlineSession) api('logout', {}, { timeout: 10000 }).catch(() => {});
+      stopCamera();
+      S.token = null; S.cart = []; LS.del('session');   // the per-user copy stays so this person can still unlock offline later
+      await new Promise(r => setTimeout(r, 450));      // long enough to see that the tap worked
+      document.querySelectorAll('.ov').forEach(x => x.remove());
+      await showLogin();
+    } finally { S.loggingOut = false; ov.remove(); }
   }
 
   /* ---------------- icons (line icons, 24px grid) ---------------- */
@@ -536,6 +555,7 @@
 
   /* ---------------- UI helpers ---------------- */
   function toast(msg, type, ms, action) {
+    if (!msg) return;   // quiet errors (e.g. an old answer after logging out)
     const box = document.getElementById('toasts');
     while (box.children.length >= 1) box.firstChild.remove();
     const el = document.createElement('div'); el.className = 'toast ' + (type || '');
@@ -560,7 +580,7 @@
     ov.addEventListener('click', e => { if (e.target === ov && !o.sticky) close(); });
     (o.actions || []).forEach(a => {
       const b = document.createElement('button'); b.className = 'btn ' + (a.cls || ''); b.innerHTML = (a.icon ? icon(a.icon) : '') + esc(a.label);
-      b.onclick = () => a.onClick ? withBusy(b, () => a.onClick(close, el)) : close();
+      b.onclick = () => closed ? null : a.onClick ? withBusy(b, () => a.onClick(close, el)) : close();   // no second tap while the sheet closes
       ov.querySelector('.ft').appendChild(b);
     });
     if (o.onOpen) o.onOpen(el, close);
@@ -578,7 +598,7 @@
   async function withBusy(btn, fn) {
     if (btn.disabled) return;
     const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span> ${esc(t('Please wait…'))}`;
-    try { await fn(); } catch (e) { toast(e.message || String(e), 'err'); } finally { if (btn.isConnected) { btn.disabled = false; btn.innerHTML = old; } }
+    try { await fn(); } catch (e) { if (e.kind !== 'stale') toast(e.message || String(e), 'err'); } finally { if (btn.isConnected) { btn.disabled = false; btn.innerHTML = old; } }
   }
   function formData(el) {
     const o = {};

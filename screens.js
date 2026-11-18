@@ -301,6 +301,7 @@
         <div id="hist"></div>`;
       $('#of').onsubmit = e => {
         e.preventDefault();
+        if (e.target.dataset.done) return; e.target.dataset.done = '1';   // a second tap never opens a second shift
         const f = formData(e.target), lp = A.localParts();
         const data = { id: A.uid('SH'), business: S.biz, openCash: num(f.openCash), openCashUSD: num(f.openCashUSD), openZaadSH: num(f.openZaadSH), openZaadUSD: num(f.openZaadUSD), openEdSH: num(f.openEdSH), openEdUSD: num(f.openEdUSD) };
         enqueue('shift.open', data);

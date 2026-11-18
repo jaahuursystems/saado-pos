@@ -307,3 +307,7 @@ label.f { display: block; margin-bottom: 12px; } label.f > span { display: block
 @keyframes dotp { 50% { transform: scale(.6); opacity: .5; } }
 .lgwait { display: inline-flex; align-items: center; gap: 8px; background: var(--navy); color: #fff; padding: 7px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; }
 .lgwait .spin { width: 15px; height: 15px; border-width: 2px; }
+.busyov { position: fixed; inset: 0; z-index: 9999; background: rgba(10, 22, 40, .45); display: flex; align-items: center; justify-content: center; animation: fade .15s; }
+.busyov .bx { background: #fff; border-radius: 22px; padding: 22px 30px; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 200px; box-shadow: 0 12px 40px rgba(0, 0, 0, .25); }
+.busyov .bx .spin { width: 34px; height: 34px; border-width: 3.5px; color: var(--navy); }
+.ov.closing { pointer-events: none; }
