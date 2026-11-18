@@ -276,3 +276,24 @@ label.f { display: block; margin-bottom: 12px; } label.f > span { display: block
 /* placeholder shown only the very first time a page is opened (afterwards saved data appears instantly) */
 .skel { height: 78px; border-radius: var(--r); margin-bottom: 12px; background: linear-gradient(90deg, #ECEFF3 25%, #F6F8FA 50%, #ECEFF3 75%); background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite; }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+/* v1.2: cart bar Clear/Park, stock on tiles, shift comparison, insights */
+.cartbar .inner { gap: 6px; } .cartbar .sum { padding: 4px 6px; gap: 8px; } .cartbar .sum .cnt { min-width: 30px; height: 30px; }
+.cartbar .sum b { font-size: 18px; white-space: nowrap; } .cartbar .pay { min-width: 86px; padding: 0 14px; }
+.cartbar .mini { width: 44px; border-radius: 16px; display: grid; place-items: center; color: #fff; background: rgba(255, 255, 255, .12); flex: none; position: relative; overflow: hidden; }
+.cartbar .mini.x { background: rgba(198, 40, 40, .92); }
+.tile .s { font-size: 11.5px; font-weight: 600; color: var(--muted); } .tile .s.low { color: var(--red); }
+.cmp td { padding: 9px 4px; } .cmp input { width: 100%; height: 42px; border: 0; border-radius: 10px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); text-align: right; padding: 0 8px; font: inherit; font-weight: 650; font-size: 16px; }
+.cmp input:focus { outline: none; box-shadow: inset 0 0 0 2px var(--navy-2); background: #fff; }
+.tick { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--green-c); color: var(--green); }
+.tick.bad { background: var(--red-c); color: var(--red); } .tick svg { width: 14px; height: 14px; stroke-width: 2.6; }
+.toast .tact { margin-left: 6px; color: var(--gold); font-weight: 800; padding: 4px 8px; border-radius: 8px; }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; } .bars i { flex: 1; border-radius: 4px 4px 0 0; background: var(--gold); display: block; min-height: 2px; position: relative; }
+.bars i.prev { background: #C9D3DF; }
+.hm { display: grid; grid-template-columns: 30px repeat(16, 1fr); gap: 2px; font-size: 9.5px; color: var(--muted); align-items: center; } .hm b { height: 15px; border-radius: 3px; display: block; }
+.trend { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; display: inline-block; margin-top: 4px; } .trend.up { background: var(--green-c); color: var(--green); } .trend.dn { background: var(--red-c); color: var(--red); }
+.meter { height: 10px; border-radius: 6px; background: var(--surface-3); overflow: hidden; } .meter i { display: block; height: 100%; border-radius: 6px; background: var(--gold); }
+.danger { box-shadow: inset 0 0 0 1.5px #F3C2C2, var(--e1); }
+.grp { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; margin: 14px 2px 2px; }
+.chk .cnt { font-size: 12.5px; color: var(--muted); }
+.togs { display: flex; gap: 6px; flex-wrap: wrap; } .togs button { height: 36px; padding: 0 12px; border-radius: 10px; font-weight: 650; font-size: 13.5px; box-shadow: inset 0 0 0 1.5px var(--line); color: var(--muted); background: #fff; }
+.togs button.on { background: var(--navy); color: #fff; box-shadow: none; }

@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright, expect
 BASE = 'http://localhost:8787'
 SHOTS = '/tmp/shots/'
 pins = json.load(urllib.request.urlopen(BASE + '/__pins'))
-urllib.request.urlopen(BASE + '/__time?t=2026-11-15T15:00:00Z')  # 18:00 in Hargeisa: both businesses open
+urllib.request.urlopen(BASE + '/__time?t=' + time.strftime('%Y-%m-%d', time.gmtime()) + 'T15:00:00Z')  # today 18:00 in Hargeisa: both businesses open
 sheet = lambda n: [r for r in json.load(urllib.request.urlopen(BASE + '/__sheet?name=' + n))[1:] if r and r[0]]
 errors, results = [], []
 
@@ -98,6 +98,8 @@ with sync_playwright() as p:
 
     # barcode typed / USB scanner: type code + Enter adds item
     page.fill('#q', '8714789'); page.press('#q', 'Enter'); page.wait_for_selector('.cartbar'); step('typed barcode + Enter adds item (USB scanner / manual)')
+    assert page.locator('.tile .s').count() > 0; step('sell screen shows stock on tiles')
+    page.click('#clrBtn'); page.wait_for_selector('.cartbar', state='hidden'); page.click('.toast .tact'); page.wait_for_selector('.cartbar'); step('clear cart (✕) + Undo brings it back')
 
     # ---------- offline sale ----------
     ctx.set_offline(True); page.evaluate("window.dispatchEvent(new Event('offline'))")
@@ -137,13 +139,28 @@ with sync_playwright() as p:
     perm = page.evaluate("""async () => { try { await App.api('refund.decide', {id: 'x', approve: true}); return 'allowed' } catch (e) { return e.message } }""")
     assert 'permission' in perm.lower() or 'oggolaansho' in perm.lower(), perm; step('employee cannot approve refunds')
 
+    # ---------- undo a sale in my shift ----------
+    page.goto(BASE + '/#sell'); page.click('.tile:has-text("Coca-Cola")'); page.click('#payBtn'); page.wait_for_selector('#tend'); page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    page.goto(BASE + '/#shift'); page.wait_for_selector('#mysales [data-undo]')
+    page.click('#mysales [data-undo] >> nth=0'); page.click('#rs .chip[data-r="Wrong item"]'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.toast.ok')
+    rows = sheet('Sales'); assert any('undone' in [str(c) for c in r] for r in rows), rows; step('staff undoes a sale in her own shift (kept as "undone")')
+    # ---------- cash out ----------
+    page.click('#co'); page.fill('.sheet [name=amt]', '10000'); page.click('#why .chip[data-r="Bank / Zaad deposit"]'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    assert len(sheet('CashMoves')) == 1; step('cash taken out of the drawer (10,000 SH)')
     # ---------- end shift ----------
-    page.goto(BASE + '/#shift'); page.wait_for_selector('#live table')
-    page.screenshot(path=SHOTS + '10-shift.png')
-    # expected cash = 100000 + 58500 + 20000 - 5000 = 173500 ; count 173000 → 500 short
-    page.fill('[name=closeCash]', '173000'); page.fill('[name=closeZaadSH]', '24500')
-    page.click('#cf button'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.sheet:has-text("173,500")')
-    page.screenshot(path=SHOTS + '11-shift-end.png'); step('shift ended: expected cash 173,500, counted 173,000 → 500 short')
+    page.goto(BASE + '/#shift'); page.wait_for_selector('#cmp input[name=closeCash]'); page.wait_for_timeout(800)
+    # expected cash SH = 100000 - 750 change + 20000 debt paid - 5000 expense - 10000 cash out = 104,250 ; USD = $5
+    exp = page.inner_text('#expNow'); assert '104,250' in exp and '$5' in exp, exp
+    page.screenshot(path=SHOTS + '10-shift.png', full_page=True)
+    for n in ['closeCash', 'closeZaadSH', 'closeEdSH', 'closeCashUSD', 'closeZaadUSD', 'closeEdUSD']:
+        e = page.get_attribute(f'#cmp [name={n}]', 'data-exp'); v = float(e) - (500 if n == 'closeCash' else 0)
+        page.fill(f'#cmp [name={n}]', ('%g' % v))
+    assert page.locator('#cmp .tick.bad').count() >= 1
+    page.click('#endBtn'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.sheet .pill.red')
+    page.screenshot(path=SHOTS + '11-shift-end.png'); step('shift ended: SH + USD per account, 500 short in cash')
+    sh = sheet('Shifts'); assert any('-500' in [str(c) for c in r] for r in sh), sh
     page.click('.ov .ft .btn.primary')
     logout(page)
 
@@ -196,6 +213,20 @@ with sync_playwright() as p:
     step('settings: install-app button')
     page.goto(BASE + '/#stockcount'); page.wait_for_selector('#q'); page.fill('#q', 'Coca'); page.click('#res .li'); page.fill('[name=n]', '40'); page.click('.ov .ft .btn.gold')
     page.click('#sv'); page.wait_for_selector('.sheet:has-text("1 products corrected")'); step('stock count corrects stock')
+    # ---------- v1.2 owner tools ----------
+    page.goto(BASE + '/#insights'); page.wait_for_selector('.bars, .card h3'); page.wait_for_timeout(500); page.screenshot(path=SHOTS + '23-insights.png', full_page=True); step('insights page')
+    page.goto(BASE + '/#home'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(400); assert 'Raxma' in page.inner_text('#main'); page.screenshot(path=SHOTS + '24-home-v12.png', full_page=True); step('home shows shifts today / undone / cash out')
+    page.goto(BASE + '/#settings'); page.wait_for_selector('#emc'); page.wait_for_timeout(300); page.screenshot(path=SHOTS + '25-settings.png', full_page=True)
+    r = page.evaluate("""async () => { await App.api('recip.save', {name:'Hussein', email:'owner@example.com', daily:true, weekly:true, monthly:false}); const l = await App.api('recip.list', {}); await App.api('recip.test', {id: l.recipients[0].id}); return l.recipients.length }""")
+    assert r == 1; step('email recipient added + test email sent')
+    page.goto(BASE + '/#settings'); page.wait_for_selector('#dz'); page.click('#dz .btn'); page.wait_for_selector('.sheet .chk'); page.wait_for_timeout(200); page.screenshot(path=SHOTS + '26-reset.png'); page.click('.ov .ft .btn.ghost'); step('reset sheet opens with checkboxes')
+    page.goto(BASE + '/#settings'); page.wait_for_selector('#arc'); page.click('#arc .btn'); page.wait_for_selector('.sheet'); page.wait_for_timeout(500); page.screenshot(path=SHOTS + '27-archive.png'); page.click('.ov .ft .btn.ghost'); step('archive sheet opens')
+    page.evaluate("""async () => { await App.api('settings.save', {values:{food_enabled:'0'}}) }""")
+    names = page.evaluate("""async () => (await App.api('names', {})).users.map(u => u.name)""")
+    assert 'Sacad' not in names, names
+    err = page.evaluate("""async () => { try { const id = JSON.parse(localStorage.getItem('saado_names')).find(u => u.name === 'Sacad').id; await App.api('login', {userId:id, pin:'%s'}); return 'ok' } catch (e) { return e.message } }""" % ''.join(pins['Sacad']))
+    assert 'closed' in err.lower(), err
+    page.evaluate("""async () => { await App.api('settings.save', {values:{food_enabled:'1'}}) }"""); step('Fast Food switched off: Sacad hidden and blocked; switched back on')
     page.set_viewport_size({'width': 1280, 'height': 900}); page.goto(BASE + '/#home'); page.wait_for_selector('#herokpi .kpi'); page.wait_for_timeout(400)
     page.screenshot(path=SHOTS + '16-laptop.png'); step('laptop layout')
 

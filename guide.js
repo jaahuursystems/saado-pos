@@ -9,13 +9,17 @@ window.GUIDE = {
 <li>Taabo <b>Bixi</b>. Dooro <b>Caddaan / Zaad / Edahab / Deyn</b>.</li>
 <li>Caddaan: geli lacagta uu bixiyey (SH ama USD) — baaqiga waxaa lagu tusayaa SH.</li>
 <li>Zaad / Edahab: macmiilka tus lambarka akoonka. Hubi in lacagtu timid.</li>
+<li>Zaad / Edahab: dooro <b>SH</b> ama <b>USD</b> — sida macmiilku u bixiyey.</li>
 <li>Taabo <b>Dhammee iibka</b>.</li>
-<li>Macmiil kale ayaa yimid? Taabo dambiisha → <b>Dhig</b>. Dabadeed ka soo celi badhanka sare.</li></ol>
+<li>Macmiil kale ayaa yimid? Taabo <b>Dhig</b> (dambiisha hoose). Dabadeed ka soo celi badhanka sare.</li>
+<li>Dambiisha oo dhan ka saar: taabo <b>✕</b>. Khalad? Taabo <b>Celi</b> 5 ilbiriqsi gudahood.</li></ol>
+<h4>Iib khaldan ma dhacay?</h4><p><b>Wareeg → Iibka wareeggayga</b> → taabo iibka → <b>Celi iibka</b>, dooro sababta. Kaydka, lacagta la filayo iyo deynta macmiilka si toos ah ayaa loo saxayaa. Wareeggaaga furan oo keliya; milkiiluhu wuu arkaa.</p>
+<h4>Lacag ka qaad khasnadda</h4><p><b>Wareeg → Lacag ka qaad khasnadda</b>: lacagta, SH ama USD, yaa qaatay, sababta. Caddaanka la filayo wuu yaraanayaa.</p>
 <h4>4. Internet la'aan</h4><p>Iibku wuu shaqaynayaa xitaa internet la'aan. Calaamadda sare waxay muujinaysaa inta sugaysa. Marka internet-ku yimaado si toos ah ayaa loo dirayaa. <b>Ha ka bixin</b> ka hor inta aan la dirin.</p>
 <h4>5. Deyn iyo lacag-bixin</h4><ul><li>Iib deyn ah: dooro <b>Deyn</b>, dooro macmiilka (ama + macmiil cusub).</li><li>Macmiil deyn bixinaya: <b>Macaamiil</b> → magaca → <b>Qaado lacag</b>.</li></ul>
 <h4>6. Kharash iyo celin</h4><ul><li>Kharash (koronto, gaarsiin…): <b>Wax kale → Kharashaad</b>.</li><li>Alaab la soo celiyey: <b>Wax kale → Celin lacag → Codso</b>, qor sababta. Milkiilaha ayaa ansixinaya.</li></ul>
 <h4>7. Fast Food — dhammaadka maalinta</h4><p><b>Wax kale → Agabka cuntada → Isticmaalka maanta</b>: geli inta bur, saliid, baradho iyo digaag la isticmaalay.</p>
-<h4>8. Xir wareegga</h4><ol><li>Taabo <b>Wareeg</b>. Eeg "Caddaanka la filayo".</li><li>Tiri lacagta, geli caddaanka, Zaad iyo Edahab.</li><li>Taabo <b>Xir wareegga</b>. Waxaad arkaysaa haddii ay sax tahay, dheeraad ama dhiman.</li></ol>
+<h4>8. Xir wareegga</h4><ol><li>Taabo <b>Wareeg</b>. Eeg "Hadda khasnadda la filayo".</li><li>Tiri lacagta. Qor <b>SHILIN</b> iyo <b>DOOLAR</b> kasta oo akoon ah (Caddaan, Zaad, Edahab). Wadarta app-ka ayaa isku daraya.</li><li>✓ cagaar = sax. Taabo <b>Xir wareegga</b>. Waxaad arkaysaa haddii ay sax tahay, dheeraad ama dhiman.</li></ol>
 <div class="note">Beddel PIN-kaaga: <b>Wax kale → PIN-kayga</b>. PIN-kaaga cidna ha u sheegin.</div>`,
     owner: `
 <h4>Shaqada maalinlaha</h4><ul>
@@ -37,7 +41,12 @@ window.GUIDE = {
 <li>Ku dar shaqaale: magac, meesha uu ka shaqeeyo, luqadda, oggolaanshaha. PIN ayaa la sameynayaa — hal mar ayaa la muujinayaa.</li>
 <li><b>Samee PIN cusub</b> haddii qof illoobo. Dami "Akoonku waa shaqaynayaa" si aad u xirto.</li>
 <li>"Saacadaha ka baxsan": shaqaale caadi ah ma geli karo saacadaha shaqada ka baxsan (Dukaan 8–1 iyo 4–11, Fast Food 5–12) haddii aanad oggolaan.</li></ul>
-<h4>Dejinta</h4><p>Sicirka USD, soo dhoweynta (500), akoonnada Zaad/Edahab, deyn daar/dami, noocyada dalabka Fast Food, saacadaha, waqtiga xiritaanka Fast Food, noocyada kharashka. Halkan waxaa sidoo kale ku yaal badhanka <b>Ku rakib app-ka</b>.</p>
+<h4>Dejinta</h4><p>Sicirka USD, soo dhoweynta (500), akoonnada Zaad/Edahab, deyn daar/dami, noocyada dalabka Fast Food, saacadaha, waqtiga xiritaanka Fast Food, noocyada kharashka, Fast Food daar/dami, iimaylka kayd yar, xadka daahidda. Halkan waxaa sidoo kale ku yaal badhanka <b>Ku rakib app-ka</b>.</p>
+<h4>Wareegyada iyo shaqaalaha</h4><ul><li><b>Hoyga → Wareegyada maanta</b>: goorta qof kasta bilaabay. "Daahay" = in ka badan 10 daqiiqo kadib jadwalka (Dejinta → Daahid kadib).</li><li>Iibka la celiyey iyo lacagta khasnadda laga qaatay waxay ka muuqdaan Hoyga iyo Warbixinnada.</li><li>Tirtir: alaabta, macaamiisha, alaab-keenayaasha (furo → <b>Tirtir</b>). Wax taariikh leh waa la qarinayaa, lama tirtirayo. Qof deyn leh lama tirtiri karo.</li></ul>
+<h4>Falanqayn</h4><p><b>Warbixinnada → Falanqayn</b>: bishan iyo bishii hore, maalmaha ugu fiican, saacadaha mashquulka, imaanshaha shaqaalaha iyo talo ku saabsan waqtiga xiritaanka Fast Food.</p>
+<h4>Warbixinnada iimaylka</h4><ul><li><b>Dejinta → Warbixinnada iimaylka → Ku dar qof</b>. Qof kasta wuxuu doortaa maalinle (23:30), toddobaadle (habeenka Khamiista) iyo/ama bille (maalinta ugu dambeysa).</li><li>Taabo <b>Dir tijaabo</b> si aad u hubiso.</li><li>Kayd yar: iimayl isla markiiba, hal mar shay kasta ilaa la buuxiyo.</li><li>Shaqaalaha: <b>Wax kale → Warbixinnadayda iimaylka</b> si ay u beddelaan inta jeer.</li></ul>
+<h4>Fast Food daar / dami</h4><p><b>Dejinta → Ganacsiyada</b>. Marka la damiyo: liiska cuntada, warbixinnada iyo shaqaalaha Fast Food waa la qarinayaa, Sacad ma geli karo. Waxba lama tirtirayo.</p>
+<h4>Keydka (Archive) iyo Reset</h4><ul><li><b>Dejinta → U guuri xogta hore keydka</b>: xogta ka da'weyn 3 bilood waxay u guurtaa Sheet cusub oo Google Drive ku jira (galka <b>Saado POS Archive</b>), PDF soo koobid ah iyo haraaga. Haraaga deynta waa la sii wadayaa. Samee marka xariiqda cabbirka Sheet-ku casaato.</li><li><b>Qaybta khatarta → Tirtir xogta</b>: calaamadi waxa la tirtirayo, qor RESET iyo PIN-kaaga. Marka hore nuqul ayaa la kaydiyaa. Galka keydka weligiis lama tirtiro.</li></ul>
 <h4>Warbixinnada</h4><p>Iibka maalinlaha, faa'iidada, alaabta ugu iibka badan, iibka shaqaale kasta, kharashaadka, deynta macaamiisha, kayd yar, haraaga lacagta wareegyada. <b>Faa'iido = iib saafi ah − qiimaha iibsiga alaabta − kharashaadka.</b></p>
 <h4>Kaydinta (backup)</h4><p>Habeen kasta 3:00 nuqul ayaa la galiyaa Google Drive galka <b>Saado POS Backups</b>. Dejinta → <b>Hadda kaydi nuqul</b>.</p>
 <div class="note">Ereyada Soomaaliga ah: fur faylka <b>i18n.js</b> ee GitHub, beddel qoraalka midig, kaydi. Kadibna kor u qaad lambarka nooca ee <b>sw.js</b>.</div>`
@@ -51,13 +60,17 @@ window.GUIDE = {
 <li>Tap <b>Pay</b>. Choose <b>Cash / Zaad / Edahab / Credit</b>.</li>
 <li>Cash: type what the customer gave (SH or USD) — change is shown in SH.</li>
 <li>Zaad / Edahab: show the customer the account number. Check the money arrived.</li>
+<li>Zaad / Edahab: choose <b>SH</b> or <b>USD</b> — how the customer paid.</li>
 <li>Tap <b>Complete sale</b>.</li>
-<li>Another customer is waiting? Tap the cart → <b>Park</b>. Bring it back later from the button at the top.</li></ol>
+<li>Another customer is waiting? Tap <b>Park</b> (on the cart bar). Bring it back later from the button at the top.</li>
+<li>Empty the cart: tap <b>✕</b>. Mistake? Tap <b>Undo</b> within 5 seconds.</li></ol>
+<h4>Made a wrong sale?</h4><p><b>Shift → Sales in my shift</b> → tap the sale → <b>Undo sale</b>, pick a reason. Stock, expected money and the customer's debt are fixed automatically. Only in your own open shift; the owner sees every undo.</p>
+<h4>Take cash out</h4><p><b>Shift → Take cash out</b>: amount, SH or USD, who took it, why. Expected cash goes down.</p>
 <h4>4. No internet</h4><p>Selling still works. The icon at the top shows how many are waiting. They are sent automatically when the internet returns. <b>Do not log out</b> before they are sent.</p>
 <h4>5. Credit and payments</h4><ul><li>Credit sale: choose <b>Credit</b>, pick the customer (or + new customer).</li><li>Customer pays debt: <b>Customers</b> → name → <b>Receive payment</b>.</li></ul>
 <h4>6. Expenses and refunds</h4><ul><li>Expense (electricity, delivery…): <b>More → Expenses</b>.</li><li>Returned item: <b>More → Refunds → Request</b>, write the reason. An owner approves it.</li></ul>
 <h4>7. Fast Food — end of day</h4><p><b>More → Ingredients → End of day usage</b>: type how much flour, oil, potatoes and chicken were used.</p>
-<h4>8. End your shift</h4><ol><li>Tap <b>Shift</b>. Look at "Expected cash".</li><li>Count the money, type cash, Zaad and Edahab.</li><li>Tap <b>End shift</b>. You see if it is correct, extra or short.</li></ol>
+<h4>8. End your shift</h4><ol><li>Tap <b>Shift</b>. Look at "Expected in the drawer now".</li><li>Count the money. Type the <b>SHILLING</b> and <b>DOLLARS</b> for each account (Cash, Zaad, Edahab). The app adds up the totals.</li><li>Green ✓ = correct. Tap <b>End shift</b>. You see if it is correct, extra or short.</li></ol>
 <div class="note">Change your PIN: <b>More → My PIN</b>. Never tell anyone your PIN.</div>`,
     owner: `
 <h4>Daily use</h4><ul>
@@ -79,7 +92,12 @@ window.GUIDE = {
 <li>Add staff: name, where they work, language, permissions. A PIN is created and shown once.</li>
 <li><b>Make a new PIN</b> if someone forgets. Switch off "Account active" to disable.</li>
 <li>"Outside shift hours": employees cannot use the app outside working hours (Shop 8–1 and 4–11, Fast Food 5–12) unless you allow it.</li></ul>
-<h4>Settings</h4><p>USD rate, rounding (500), Zaad/Edahab accounts, credit on/off, Fast Food order types, hours, Fast Food closing time, expense categories. The <b>Install the app</b> button is here too.</p>
+<h4>Settings</h4><p>USD rate, rounding (500), Zaad/Edahab accounts, credit on/off, Fast Food order types, hours, Fast Food closing time, expense categories, Fast Food on/off, low-stock emails, the late limit. The <b>Install the app</b> button is here too.</p>
+<h4>Shifts and staff</h4><ul><li><b>Home → Shifts today</b>: when each person started. "Late" = more than 10 minutes after the schedule (Settings → Late after).</li><li>Undone sales and cash taken out show on Home and in Reports.</li><li>Delete products, customers and suppliers (open → <b>Delete</b>). Anything with history is hidden, not erased. Someone with a balance can't be deleted.</li></ul>
+<h4>Insights</h4><p><b>Reports → Insights</b>: this month vs last month, best days, busiest hours, staff attendance and a tip about the Fast Food closing time.</p>
+<h4>Email reports</h4><ul><li><b>Settings → Email reports → Add person</b>. Each person picks daily (23:30), weekly (Thursday night) and/or monthly (last day of the month).</li><li>Tap <b>Send test</b> to check.</li><li>Low stock: an email at once, one per item until restocked.</li><li>Staff: <b>More → My email reports</b> to change how often.</li></ul>
+<h4>Fast Food on / off</h4><p><b>Settings → Businesses</b>. When off: the Fast Food menu, reports and staff are hidden and Sacad can't log in. Nothing is deleted.</p>
+<h4>Archive and Reset</h4><ul><li><b>Settings → Archive old data</b>: data older than 3 months moves to a new Sheet in Google Drive (folder <b>Saado POS Archive</b>) with a PDF summary and balances. Debts are carried forward. Do it when the Sheet size bar turns red.</li><li><b>Danger zone → Reset data</b>: tick what to delete, type RESET and your PIN. A safety copy is saved first. The Archive folder is never reset.</li></ul>
 <h4>Reports</h4><p>Daily sales, profit, best sellers, sales per employee, expenses, customer debts, low stock, money balances from shifts. <b>Profit = net sales − cost of goods sold − expenses.</b></p>
 <h4>Backups</h4><p>Every night at 3:00 a copy goes to the Google Drive folder <b>Saado POS Backups</b>. Settings → <b>Back up now</b>.</p>
 <div class="note">Somali words: open <b>i18n.js</b> on GitHub, change the text on the right, save, then raise the version number in <b>sw.js</b>.</div>`

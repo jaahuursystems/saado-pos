@@ -3,7 +3,7 @@
  *
  * How to use:
  *   1. Run setup() once from the editor (safe to run again). It creates every tab, header, default
- *      setting, the 4 default ingredients and the daily Drive backup trigger.
+ *      setting, the 4 default ingredients, the nightly Drive backup and the nightly email-report triggers.
  *   2. Deploy > New deployment > Web app.  Execute as: Me.  Who has access: Anyone.
  *   3. Put the /exec URL in config.js of the app (GitHub).
  *
@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.1.0';
+var VERSION = '1.2.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -20,13 +20,16 @@ var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
 var SCHEMA = {
   Settings:   ['key', 'value', 'note'],
   Users:      ['id', 'name', 'role', 'business', 'pinHash', 'salt', 'active', 'lang', 'afterHours', 'perms', 'createdAt', 'pinChanged'],
-  Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt'],
-  Sales:      ['id', 'ts', 'date', 'business', 'userId', 'userName', 'shiftId', 'method', 'orderType', 'customerId', 'customerName', 'subtotal', 'discount', 'total', 'cost', 'tendered', 'tenderCur', 'change', 'status', 'refunded', 'note'],
+  Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt', 'lowAlerted', 'deleted'],
+  Sales:      ['id', 'ts', 'date', 'business', 'userId', 'userName', 'shiftId', 'method', 'orderType', 'customerId', 'customerName', 'subtotal', 'discount', 'total', 'cost', 'tendered', 'tenderCur', 'change', 'status', 'refunded', 'note',
+               'payCur', 'usdAmount', 'undoneBy', 'undoneTs', 'undoReason'],
   SaleItems:  ['saleId', 'date', 'business', 'productId', 'name', 'qty', 'price', 'cost', 'lineTotal'],
   Shifts:     ['id', 'business', 'userId', 'userName', 'status', 'openTs', 'closeTs', 'date', 'openCash', 'openZaadSH', 'openZaadUSD', 'openEdSH', 'openEdUSD',
                'closeCash', 'closeZaadSH', 'closeZaadUSD', 'closeEdSH', 'closeEdUSD', 'rate',
                'cashSales', 'zaadSales', 'edSales', 'creditSales', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'refCash', 'refZaad', 'refEd',
-               'expectedCash', 'diffCash', 'expectedZaad', 'diffZaad', 'expectedEd', 'diffEd', 'note'],
+               'expectedCash', 'diffCash', 'expectedZaad', 'diffZaad', 'expectedEd', 'diffEd', 'note',
+               'openCashUSD', 'closeCashUSD', 'cashOutSH', 'cashOutUSD', 'eCashSH', 'eCashUSD', 'eZaadSH', 'eZaadUSD', 'eEdSH', 'eEdUSD',
+               'totalExpSH', 'totalExpUSD', 'totalCountSH', 'totalCountUSD', 'diffSH', 'diffUSD', 'diffAll'],
   Customers:  ['id', 'business', 'name', 'phone', 'balance', 'note', 'createdAt', 'active'],
   CustLedger: ['id', 'ts', 'date', 'business', 'customerId', 'type', 'amount', 'method', 'ref', 'shiftId', 'userName', 'note'],
   Suppliers:  ['id', 'business', 'name', 'phone', 'balance', 'note', 'createdAt', 'active'],
@@ -38,7 +41,10 @@ var SCHEMA = {
   Ingredients:['id', 'name', 'unit', 'stock', 'lowLevel', 'cost', 'active', 'updatedAt'],
   IngLog:     ['id', 'ts', 'date', 'ingredientId', 'name', 'type', 'qty', 'userName', 'note'],
   StockLog:   ['id', 'ts', 'date', 'business', 'productId', 'name', 'type', 'before', 'after', 'diff', 'userName', 'note'],
-  Audit:      ['ts', 'userName', 'action', 'details']
+  Audit:      ['ts', 'userName', 'action', 'details'],
+  CashMoves:  ['id', 'ts', 'date', 'business', 'shiftId', 'amount', 'currency', 'takenBy', 'reason', 'note', 'userName'],
+  Recipients: ['id', 'name', 'email', 'userId', 'daily', 'weekly', 'monthly', 'lowStock', 'active', 'createdAt'],
+  MonthlySummary: ['month', 'business', 'count', 'sales', 'refunds', 'netSales', 'cost', 'expenses', 'profit', 'cash', 'zaad', 'edahab', 'credit', 'updatedAt']
 };
 
 // key: [default, note].  Only these keys can be changed from the app.
@@ -63,12 +69,24 @@ var DEFAULT_SETTINGS = {
   shopName:       ['Saado Shop', ''],
   foodName:       ['Saado Fast Food', ''],
   shopPhone:      ['', 'Shown on supplier orders'],
-  ownerWhatsApp:  ['', 'Number for the daily summary, e.g. 252634000000']
+  ownerWhatsApp:  ['', 'Number for the daily summary, e.g. 252634000000'],
+  food_enabled:   ['1', 'Fast Food open (1) or closed (0). Closed hides everything Fast Food; nothing is deleted'],
+  lateMin:        ['10', 'Minutes after the shift start that count as late'],
+  lowStockEmail:  ['1', 'Email at once when an item reaches its warning level (1/0)'],
+  weeklyDay:      ['Thu', 'Day the weekly email report is sent (night)'],
+  appUrl:         ['https://jaahuursystems.github.io/saado-pos/', 'App link used in emails'],
+  dataVersion:    ['1', 'Changes after a reset (do not edit)'],
+  archivedUntil:  ['', 'Data before this date is in the Archive (do not edit)'],
+  archiveLinks:   ['[]', 'Archive sheets (do not edit)'],
+  permsV2:        ['0', 'Internal (do not edit)']
 };
+var PROTECTED_SETTINGS = { dataVersion: 1, archivedUntil: 1, archiveLinks: 1, permsV2: 1 };
 
 var PERMS = ['viewReports', 'viewProfit', 'viewStock', 'changePrices', 'manageProducts', 'discount', 'customers', 'suppliers',
+             'undoSales', 'cashOut', 'voidSales', 'deleteProducts', 'deleteCustomers', 'deleteSuppliers', 'viewInsights', 'emailReports',
              'expenses', 'ingredients', 'stockCount', 'approveRefunds', 'manageUsers', 'settings', 'export', 'audit'];
-var EMPLOYEE_DEFAULT_PERMS = ['viewStock', 'customers', 'expenses', 'ingredients'];
+var EMPLOYEE_DEFAULT_PERMS = ['viewStock', 'customers', 'expenses', 'ingredients', 'undoSales', 'cashOut'];
+var GONE = { undone: 1, void: 1 };   // sale status that no longer counts
 var BIZ = ['shop', 'food'];
 var METHODS = ['cash', 'zaad', 'edahab', 'credit'];
 var PAY_METHODS = ['cash', 'zaad', 'edahab'];
@@ -95,14 +113,14 @@ function out_(o) {
 }
 
 var PUBLIC = { ping: 1, names: 1, login: 1 };
-var READS = { boot: 1, 'po.list': 1, report: 1, 'sales.list': 1, 'cust.ledger': 1, 'sup.ledger': 1, 'refund.list': 1, 'users.list': 1, 'audit.list': 1,
+var READS = { boot: 1, 'po.list': 1, insights: 1, 'recip.list': 1, 'recip.mine': 1, 'admin.counts': 1, 'admin.archivePreview': 1, report: 1, 'sales.list': 1, 'cust.ledger': 1, 'sup.ledger': 1, 'refund.list': 1, 'users.list': 1, 'audit.list': 1,
               'export': 1, 'shift.list': 1, 'ing.log': 1, 'exp.list': 1, 'stock.log': 1, logout: 1 };
 
 function handle_(req) {
   T_ = {};
   var a = String(req.action || '');
   if (a === 'ping') return { ok: true, version: VERSION, time: nowIso_() };
-  if (a === 'names') return { ok: true, users: table_('Users').rows.filter(function (u) { return isOn_(u.active); })
+  if (a === 'names') return { ok: true, users: table_('Users').rows.filter(function (u) { return isOn_(u.active) && bizList_(u).length; })
                                  .map(function (u) { return { id: u.id, name: u.name, business: u.business }; }) };
   if (a === 'login') return withLock_(function () { return login_(req.data || {}); });
 
@@ -110,8 +128,12 @@ function handle_(req) {
   var fn = ACTIONS[a];
   if (a === 'sync') fn = sync_;
   if (!fn) throw new Error('Unknown action: ' + a);
+  if (a === 'sync' && req.data && req.data.dataVersion && String(req.data.dataVersion) !== String(setting_('dataVersion')))
+    return { ok: true, reset: true, dataVersion: setting_('dataVersion'), results: [] };   // phone has data from before a reset
   if (READS[a]) return fn(user, req.data || {});
-  return withLock_(function () { return fn(user, req.data || {}); });
+  var res = withLock_(function () { return fn(user, req.data || {}); });
+  if (T_._lowAlerts && T_._lowAlerts.length) { try { sendLowStock_(T_._lowAlerts); } catch (e) {} }
+  return res;
 }
 
 function withLock_(f) {
@@ -197,6 +219,7 @@ function insertMany_(name, list) {
 }
 
 function update_(name, o) {
+  if (name === 'Products' && isOn_(o.lowAlerted) && num_(o.stock) > num_(o.lowStock)) o.lowAlerted = 0;
   var t = table_(name);
   t.sh.getRange(o._r, 1, 1, t.headers.length).setValues([rowArr_(t, o)]);
   return o;
@@ -272,6 +295,7 @@ function login_(d) {
     throw new Error('Wrong PIN (' + (MAX_FAILS - f) + ' tries left)');
   }
   cache.remove(failKey);
+  if (!bizList_(u).length) throw new Error('CLOSED: Fast Food is closed. Ask the owner.');
   checkHours_(u, null, new Date());
   var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
   cache.put('tok_' + token, u.id, TOKEN_HOURS * 3600);
@@ -288,6 +312,7 @@ function auth_(token) {
   if (!id) throw new Error('AUTH: session expired, please log in again');
   var u = find_('Users', id);
   if (!u || !isOn_(u.active)) throw new Error('AUTH: account disabled');
+  if (!bizList_(u).length) throw new Error('AUTH: Fast Food is closed');
   u._token = token;
   return u;
 }
@@ -299,7 +324,11 @@ function perms_(u) {
 }
 function can_(u, p) { return isOwner_(u) || perms_(u).indexOf(p) >= 0; }
 function need_(u, p) { if (!can_(u, p)) throw new Error('NOPERM: you do not have permission (' + p + ')'); }
-function bizList_(u) { return (isOwner_(u) || u.business === 'both') ? BIZ.slice() : [u.business]; }
+function foodOn_() { return setting_('food_enabled') !== '0'; }
+function bizList_(u) {
+  var l = (isOwner_(u) || u.business === 'both') ? BIZ.slice() : [u.business];
+  return foodOn_() ? l : l.filter(function (b) { return b !== 'food'; });
+}
 function needBiz_(u, b) {
   if (BIZ.indexOf(b) < 0) throw new Error('Choose Shop or Fast Food');
   if (bizList_(u).indexOf(b) < 0) throw new Error('NOPERM: you cannot use this business');
@@ -336,7 +365,7 @@ function boot_(u, d) {
   var biz = bizList_(u);
   var s = settingsMap_(), settings = {};
   Object.keys(DEFAULT_SETTINGS).forEach(function (k) { settings[k] = k in s ? s[k] : DEFAULT_SETTINGS[k][0]; });
-  var products = table_('Products').rows.filter(function (p) { return biz.indexOf(p.business) >= 0; }).map(function (p) {
+  var products = table_('Products').rows.filter(function (p) { return biz.indexOf(p.business) >= 0 && !isOn_(p.deleted); }).map(function (p) {
     var c = clean_(p);
     if (!can_(u, 'viewProfit') && !can_(u, 'changePrices')) delete c.cost;
     return c;
@@ -409,20 +438,28 @@ var ACTIONS = {
       cust = find_('Customers', d.customerId);
       if (!cust || cust.business !== biz) throw new Error('Choose a credit customer');
     }
-    var tendered = num_(d.tendered), cur = d.tenderCur === 'USD' ? 'USD' : 'SH', change = 0;
+    var tendered = num_(d.tendered), cur = d.tenderCur === 'USD' ? 'USD' : 'SH', change = 0, payCur = 'SH', usdAmount = 0;
     if (method === 'cash' && tendered > 0) {
       change = (cur === 'USD' ? tendered * rate_() : tendered) - total;
       if (change < 0) throw new Error('Cash given is less than the total');
+      if (cur === 'USD') { payCur = 'USD'; usdAmount = tendered; }       // dollars go in the drawer, change comes out in SH
     }
+    if ((method === 'zaad' || method === 'edahab') && d.payCur === 'USD') { payCur = 'USD'; usdAmount = Math.ceil(total / rate_() * 100) / 100; }
     var orderType = biz === 'food' ? str_(d.orderType || 'Take away', 40) : '';
     var sale = { id: id, ts: ts, date: dateOf_(ts), business: biz, userId: u.id, userName: u.name, shiftId: shift ? shift.id : '',
                  method: method, orderType: orderType, customerId: cust ? cust.id : '', customerName: cust ? cust.name : '',
                  subtotal: subtotal, discount: discount, total: total, cost: cost, tendered: tendered, tenderCur: cur, change: change,
-                 status: 'ok', refunded: 0, note: str_(d.note, 200) };
+                 status: 'ok', refunded: 0, note: str_(d.note, 200), payCur: payCur, usdAmount: usdAmount };
     insert_('Sales', sale);
     insertMany_('SaleItems', lines);
     var now = nowIso_();
-    touched.forEach(function (p) { p.updatedAt = now; update_('Products', p); });
+    touched.forEach(function (p) {
+      p.updatedAt = now;
+      if (p.business === 'shop' && num_(p.lowStock) > 0 && num_(p.stock) <= num_(p.lowStock) && !isOn_(p.lowAlerted)) {
+        p.lowAlerted = 1; (T_._lowAlerts = T_._lowAlerts || []).push({ name: p.name, stock: num_(p.stock), lowStock: num_(p.lowStock) });
+      }
+      update_('Products', p);
+    });
     if (cust) {
       cust.balance = num_(cust.balance) + total; update_('Customers', cust);
       insert_('CustLedger', { id: uid_('CL'), ts: ts, date: dateOf_(ts), business: biz, customerId: cust.id, type: 'sale', amount: total, method: 'credit',
@@ -452,7 +489,7 @@ var ACTIONS = {
     var ex = find_('Shifts', id); if (ex) return { ok: true, dup: true, shift: clean_(ex) };
     if (openShift_(u, biz)) throw new Error('You already have an open shift here');
     var s = { id: id, business: biz, userId: u.id, userName: u.name, status: 'open', openTs: nowIso_(), date: today_(),
-              openCash: num_(d.openCash), openZaadSH: num_(d.openZaadSH), openZaadUSD: num_(d.openZaadUSD), openEdSH: num_(d.openEdSH), openEdUSD: num_(d.openEdUSD),
+              openCash: num_(d.openCash), openCashUSD: num_(d.openCashUSD), openZaadSH: num_(d.openZaadSH), openZaadUSD: num_(d.openZaadUSD), openEdSH: num_(d.openEdSH), openEdUSD: num_(d.openEdUSD),
               rate: rate_(), note: str_(d.note) };
     insert_('Shifts', s); audit_(u, 'shift.open', { id: id, biz: biz, cash: s.openCash });
     return { ok: true, shift: clean_(s) };
@@ -461,7 +498,8 @@ var ACTIONS = {
   'shift.preview': function (u, d) {
     var s = find_('Shifts', d.id); if (!s) throw new Error('Shift not found');
     if (s.userId !== u.id && !isOwner_(u)) throw new Error('NOPERM: not your shift');
-    return { ok: true, totals: shiftTotals_(s) };
+    var moves = table_('CashMoves').rows.filter(function (m) { return m.shiftId === s.id; }).map(clean_);
+    return { ok: true, totals: shiftTotals_(s), moves: moves, shift: clean_(s) };
   },
 
   'shift.close': function (u, d) {
@@ -470,12 +508,17 @@ var ACTIONS = {
     if (s.userId !== u.id && !isOwner_(u)) throw new Error('NOPERM: not your shift');
     var rate = num_(s.rate) || rate_();
     var t = shiftTotals_(s);
-    s.closeCash = num_(d.closeCash); s.closeZaadSH = num_(d.closeZaadSH); s.closeZaadUSD = num_(d.closeZaadUSD);
+    s.closeCash = num_(d.closeCash); s.closeCashUSD = num_(d.closeCashUSD); s.closeZaadSH = num_(d.closeZaadSH); s.closeZaadUSD = num_(d.closeZaadUSD);
     s.closeEdSH = num_(d.closeEdSH); s.closeEdUSD = num_(d.closeEdUSD);
     for (var k in t) s[k] = t[k];
-    s.diffCash = s.closeCash - t.expectedCash;
+    s.diffCash = s.closeCash + s.closeCashUSD * rate - t.expectedCash;
     s.diffZaad = s.closeZaadSH + s.closeZaadUSD * rate - t.expectedZaad;
     s.diffEd = s.closeEdSH + s.closeEdUSD * rate - t.expectedEd;
+    s.totalCountSH = s.closeCash + s.closeZaadSH + s.closeEdSH;
+    s.totalCountUSD = Math.round((s.closeCashUSD + s.closeZaadUSD + s.closeEdUSD) * 100) / 100;
+    s.diffSH = s.totalCountSH - t.totalExpSH;
+    s.diffUSD = Math.round((s.totalCountUSD - t.totalExpUSD) * 100) / 100;
+    s.diffAll = s.diffSH + s.diffUSD * rate;
     s.status = 'closed'; s.closeTs = nowIso_(); s.note = str_(d.note || s.note);
     update_('Shifts', s); audit_(u, 'shift.close', { id: s.id, diffCash: s.diffCash });
     return { ok: true, shift: clean_(s) };
@@ -680,6 +723,144 @@ var ACTIONS = {
     return { ok: true, order: clean_(po), supplier: s ? clean_(s) : null };
   },
 
+  /* ---------- undo / void a sale ----------
+     Staff: only sales in their own OPEN shift (permission undoSales). Owners / voidSales: any sale, any time.
+     The sale stays in the Sheet marked "undone"/"void" (with who, when, why) so nothing disappears silently. */
+  'sale.undo': function (u, d) {
+    var s = find_('Sales', d.id); if (!s) throw new Error('Sale not found (it may still be syncing)');
+    if (GONE[s.status]) return { ok: true, dup: true, sale: clean_(s) };
+    needBiz_(u, s.business);
+    var reason = str_(d.reason, 120); if (!reason) throw new Error('Choose a reason');
+    var sh = s.shiftId ? find_('Shifts', s.shiftId) : null;
+    var own = s.userId === u.id && sh && sh.status === 'open';
+    if (!can_(u, 'voidSales')) {
+      if (!own) throw new Error('NOPERM: you can only undo sales in your own open shift');
+      need_(u, 'undoSales');
+    }
+    if (num_(s.refunded) > 0 || table_('Refunds').rows.some(function (r) { return r.saleId === s.id && r.status !== 'rejected'; }))
+      throw new Error('This sale has a refund. It cannot be undone.');
+    var now = nowIso_(), touched = [];
+    table_('SaleItems').rows.filter(function (i) { return i.saleId === s.id; }).forEach(function (i) {
+      var p = find_('Products', i.productId); if (!p) return;
+      p.sold = Math.max(0, num_(p.sold) - num_(i.qty));
+      if (p.business === 'shop') {
+        var before = num_(p.stock); p.stock = before + num_(i.qty);
+        insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'undo', before: before, after: p.stock, diff: num_(i.qty), userName: u.name, note: s.id });
+      }
+      p.updatedAt = now; update_('Products', p); touched.push(p);
+    });
+    var cust = null;
+    if (s.method === 'credit' && s.customerId) {
+      cust = find_('Customers', s.customerId);
+      if (cust) {
+        cust.balance = num_(cust.balance) - num_(s.total); update_('Customers', cust);
+        insert_('CustLedger', { id: uid_('CL'), ts: now, date: today_(), business: s.business, customerId: cust.id, type: 'void', amount: num_(s.total), method: 'credit', ref: s.id, shiftId: s.shiftId, userName: u.name, note: reason });
+      }
+    }
+    s.status = own ? 'undone' : 'void'; s.undoneBy = u.name; s.undoneTs = now; s.undoReason = reason; update_('Sales', s);
+    audit_(u, own ? 'sale.undo' : 'sale.void', { sale: s.id, total: s.total, method: s.method, by: s.userName, reason: reason });
+    return { ok: true, sale: clean_(s), stock: touched.map(function (p) { return { id: p.id, stock: p.stock, sold: p.sold }; }), customer: cust ? clean_(cust) : null };
+  },
+
+  /* ---------- cash taken out of the drawer ---------- */
+  'cash.out': function (u, d) {
+    need_(u, 'cashOut');
+    if (exists_('CashMoves', d.id)) return { ok: true, dup: true };
+    var biz = d.business; needBiz_(u, biz);
+    var amt = num_(d.amount); if (!(amt > 0)) throw new Error('Enter an amount');
+    var who = str_(d.takenBy, 40); if (!who) throw new Error('Who took the money?');
+    var shift = openShift_(u, biz) || anyOpenShift_(biz);
+    var m = { id: d.id || uid_('CO'), ts: nowIso_(), date: today_(), business: biz, shiftId: shift ? shift.id : '', amount: amt, currency: d.currency === 'USD' ? 'USD' : 'SH',
+              takenBy: who, reason: str_(d.reason, 60), note: str_(d.note, 200), userName: u.name };
+    insert_('CashMoves', m); audit_(u, 'cash.out', { amount: amt, currency: m.currency, takenBy: who, reason: m.reason });
+    return { ok: true, move: clean_(m) };
+  },
+
+  /* ---------- delete (owner, or users with the delete permissions) ----------
+     Anything with history is hidden instead of erased, so old sales and reports stay correct. */
+  'prod.delete': function (u, d) {
+    need_(u, 'deleteProducts');
+    var p = find_('Products', d.id); if (!p) throw new Error('Product not found');
+    needBiz_(u, p.business);
+    var used = num_(p.sold) > 0 || table_('SaleItems').rows.some(function (i) { return i.productId === p.id; }) ||
+               table_('PurchaseOrders').rows.some(function (o) { return String(o.items).indexOf(p.id) >= 0; });
+    audit_(u, 'prod.delete', { name: p.name, kept: used });
+    if (used) { p.active = 0; p.deleted = 1; p.lowAlerted = 0; p.updatedAt = nowIso_(); update_('Products', p); return { ok: true, removed: 'hidden' }; }
+    deleteRow_('Products', p); return { ok: true, removed: 'deleted' };
+  },
+  'cust.delete': function (u, d) {
+    need_(u, 'deleteCustomers');
+    var c = find_('Customers', d.id); if (!c) throw new Error('Customer not found');
+    needBiz_(u, c.business);
+    if (num_(c.balance) !== 0) throw new Error('This customer still has a balance. Settle it first.');
+    var used = table_('CustLedger').rows.some(function (l) { return l.customerId === c.id; });
+    audit_(u, 'cust.delete', { name: c.name, kept: used });
+    if (used) { c.active = 0; update_('Customers', c); return { ok: true, removed: 'hidden' }; }
+    deleteRow_('Customers', c); return { ok: true, removed: 'deleted' };
+  },
+  'sup.delete': function (u, d) {
+    need_(u, 'deleteSuppliers');
+    var s = find_('Suppliers', d.id); if (!s) throw new Error('Supplier not found');
+    needBiz_(u, s.business);
+    if (Math.abs(supBalance_(s)) > 0) throw new Error('This supplier still has a balance. Settle it first.');
+    if (table_('PurchaseOrders').rows.some(function (o) { return o.supplierId === s.id && (o.status === 'DRAFT' || o.status === 'SENT'); })) throw new Error('This supplier has open orders.');
+    var used = table_('SupLedger').rows.some(function (l) { return l.supplierId === s.id; }) || table_('PurchaseOrders').rows.some(function (o) { return o.supplierId === s.id; });
+    audit_(u, 'sup.delete', { name: s.name, kept: used });
+    if (used) { s.active = 0; update_('Suppliers', s); return { ok: true, removed: 'hidden' }; }
+    deleteRow_('Suppliers', s); return { ok: true, removed: 'deleted' };
+  },
+
+  /* ---------- insights: this month vs last month, days, hours, attendance ---------- */
+  insights: function (u, d) { need_(u, 'viewInsights'); return insights_(u, d); },
+
+  /* ---------- email report recipients ---------- */
+  'recip.list': function (u) {
+    need_(u, 'settings');
+    return { ok: true, recipients: table_('Recipients').rows.filter(function (r) { return isOn_(r.active); }).map(clean_),
+             users: table_('Users').rows.filter(function (x) { return isOn_(x.active); }).map(function (x) { return { id: x.id, name: x.name }; }) };
+  },
+  'recip.mine': function (u) { return { ok: true, recipients: table_('Recipients').rows.filter(function (r) { return r.userId === u.id && isOn_(r.active); }).map(clean_) }; },
+  'recip.save': function (u, d) {
+    var r = d.id ? find_('Recipients', d.id) : null;
+    var admin = can_(u, 'settings');
+    if (!admin) {   // a person may only change how often THEY get reports
+      need_(u, 'emailReports');
+      if (!r || r.userId !== u.id) throw new Error('NOPERM: you can only change your own email reports');
+    }
+    var email = str_(d.email !== undefined ? d.email : r && r.email, 120).toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Enter a valid email address');
+    var f = function (k) { return d[k] !== undefined ? (isOn_(d[k]) ? 1 : 0) : (r ? num_(r[k]) : 0); };
+    if (!r) {
+      if (!admin) throw new Error('NOPERM');
+      r = { id: uid_('RC'), name: str_(d.name, 60), email: email, userId: str_(d.userId, 40), daily: f('daily'), weekly: f('weekly'), monthly: f('monthly'), lowStock: f('lowStock'), active: 1, createdAt: nowIso_() };
+      insert_('Recipients', r);
+    } else {
+      if (admin) { r.name = str_(d.name !== undefined ? d.name : r.name, 60); r.email = email; r.userId = str_(d.userId !== undefined ? d.userId : r.userId, 40); r.lowStock = f('lowStock'); }
+      r.daily = f('daily'); r.weekly = f('weekly'); r.monthly = f('monthly');
+      update_('Recipients', r);
+    }
+    audit_(u, 'recip.save', { email: r.email, daily: r.daily, weekly: r.weekly, monthly: r.monthly });
+    return { ok: true, recipient: clean_(r) };
+  },
+  'recip.delete': function (u, d) {
+    need_(u, 'settings');
+    var r = find_('Recipients', d.id); if (!r) throw new Error('Not found');
+    r.active = 0; update_('Recipients', r); audit_(u, 'recip.delete', r.email);
+    return { ok: true };
+  },
+  'recip.test': function (u, d) {
+    need_(u, 'settings');
+    var r = find_('Recipients', d.id); if (!r) throw new Error('Not found');
+    sendReport_('daily', [r], true);
+    return { ok: true };
+  },
+
+  /* ---------- owner tools: data size, reset, archive ---------- */
+  'admin.counts': function (u) { needOwner_(u); return adminCounts_(); },
+  'admin.reset': function (u, d) { needOwner_(u); return reset_(u, d); },
+  'admin.archivePreview': function (u, d) { needOwner_(u); return archive_(u, d.cutoff, true); },
+  'admin.archive': function (u, d) { needOwner_(u); return archive_(u, d.cutoff, false); },
+
   /* ---------- expenses ---------- */
   'exp.create': function (u, d) {
     need_(u, 'expenses');
@@ -700,6 +881,7 @@ var ACTIONS = {
   'refund.request': function (u, d) {
     if (exists_('Refunds', d.id)) return { ok: true, dup: true };
     var sale = find_('Sales', d.saleId); if (!sale) throw new Error('Sale not found (it may still be syncing)');
+    if (GONE[sale.status]) throw new Error('This sale was undone');
     needBiz_(u, sale.business);
     var reason = str_(d.reason, 200); if (!reason) throw new Error('Write a reason');
     var items = table_('SaleItems').rows.filter(function (i) { return i.saleId === sale.id; });
@@ -944,7 +1126,7 @@ var ACTIONS = {
     need_(u, 'settings');
     var t = table_('Settings'), changed = [];
     Object.keys(d.values || {}).forEach(function (k) {
-      if (!(k in DEFAULT_SETTINGS)) return;
+      if (!(k in DEFAULT_SETTINGS) || PROTECTED_SETTINGS[k]) return;
       var v = str_(d.values[k], 500);
       if (k === 'usdRate' && !(num_(v) > 0)) throw new Error('USD rate must be a number');
       if (k === 'roundStep' && !(num_(v) >= 1)) throw new Error('Rounding step must be at least 1');
@@ -1031,6 +1213,7 @@ function supBalance_(s) {
     if (l.type === 'purchase') bal += num_(l.amount) - num_(l.paid);
     else if (l.type === 'receipt') bal += num_(l.amount);
     else if (l.type === 'payment') bal -= num_(l.amount);
+    else if (l.type === 'opening' || l.type === 'adjust') bal += num_(l.amount);
   });
   s.balance = bal; update_('Suppliers', s);
   return bal;
@@ -1087,21 +1270,45 @@ function addExpense_(u, biz, cat, amt, method, ref, note, id) {
   return e;
 }
 
+// Money a sale brought in, per account and currency (works for old sales too).
+function saleMoney_(x) {
+  var cur = x.payCur || (x.method === 'cash' && x.tenderCur === 'USD' && num_(x.tendered) > 0 ? 'USD' : 'SH');
+  var usd = num_(x.usdAmount) || (cur === 'USD' && x.method === 'cash' ? num_(x.tendered) : 0);
+  if (x.method === 'cash' && cur === 'USD') return { sh: -num_(x.change), usd: usd };   // dollars in, change out in SH
+  if (cur === 'USD') return { sh: 0, usd: usd };
+  return { sh: num_(x.total), usd: 0 };
+}
 function shiftTotals_(s) {
-  var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0 };
-  var key = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' };
+  var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0,
+            cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, undoneCount: 0 };
+  var key = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }, inKey = { cash: 'cash', zaad: 'zaad', edahab: 'ed' };
   table_('Sales').rows.forEach(function (x) {
     if (x.shiftId !== s.id) return;
+    if (GONE[x.status]) { t.undoneCount++; return; }
     t.saleCount++;
-    if (x.method === 'credit') t.creditSales += num_(x.total); else t[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[x.method]] += num_(x.total);
+    if (x.method === 'credit') { t.creditSales += num_(x.total); return; }
+    t[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[x.method]] += num_(x.total);
+    var m = saleMoney_(x), k = inKey[x.method];
+    t[k + 'InSH'] += m.sh; t[k + 'InUSD'] += m.usd;
   });
   table_('CustLedger').rows.forEach(function (x) { if (x.shiftId === s.id && x.type === 'payment' && key[x.method]) t['custPay' + key[x.method]] += num_(x.amount); });
   table_('Expenses').rows.forEach(function (x) { if (x.shiftId === s.id && key[x.method]) t['exp' + key[x.method]] += num_(x.amount); });
   table_('Refunds').rows.forEach(function (x) { if (x.shiftId === s.id && x.status === 'approved' && key[x.method]) t['ref' + key[x.method]] += num_(x.amount); });
-  var rate = num_(s.rate) || rate_();
-  t.expectedCash = num_(s.openCash) + t.cashSales + t.custPayCash - t.expCash - t.refCash;
-  t.expectedZaad = num_(s.openZaadSH) + num_(s.openZaadUSD) * rate + t.zaadSales + t.custPayZaad - t.expZaad - t.refZaad;
-  t.expectedEd = num_(s.openEdSH) + num_(s.openEdUSD) * rate + t.edSales + t.custPayEd - t.expEd - t.refEd;
+  table_('CashMoves').rows.forEach(function (x) { if (x.shiftId === s.id) t[x.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num_(x.amount); });
+  var rate = num_(s.rate) || rate_(), r2 = function (v) { return Math.round(v * 100) / 100; };
+  t.eCashSH = num_(s.openCash) + t.cashInSH + t.custPayCash - t.expCash - t.refCash - t.cashOutSH;
+  t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD);
+  t.eZaadSH = num_(s.openZaadSH) + t.zaadInSH + t.custPayZaad - t.expZaad - t.refZaad;
+  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD);
+  t.eEdSH = num_(s.openEdSH) + t.edInSH + t.custPayEd - t.expEd - t.refEd;
+  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD);
+  t.totalExpSH = t.eCashSH + t.eZaadSH + t.eEdSH;
+  t.totalExpUSD = r2(t.eCashUSD + t.eZaadUSD + t.eEdUSD);
+  // same money counted in SH (older screens and reports use these)
+  t.expectedCash = t.eCashSH + t.eCashUSD * rate;
+  t.expectedZaad = t.eZaadSH + t.eZaadUSD * rate;
+  t.expectedEd = t.eEdSH + t.eEdUSD * rate;
+  t.rate = rate;
   return t;
 }
 
@@ -1111,7 +1318,7 @@ function report_(u, d) {
   var inR = function (x) { return biz.indexOf(x.business) >= 0 && x.date >= from && x.date <= to; };
   var blank = function () { return { count: 0, subtotal: 0, discount: 0, sales: 0, cost: 0, refunds: 0, refundCost: 0, expenses: 0, stockPurchases: 0, cash: 0, zaad: 0, edahab: 0, credit: 0, custPay: 0 }; };
   var byBiz = { shop: blank(), food: blank() }, days = {}, emp = {}, items = {};
-  var sales = table_('Sales').rows.filter(inR), saleIds = {};
+  var sales = table_('Sales').rows.filter(function (x) { return inR(x) && !GONE[x.status]; }), saleIds = {};
   sales.forEach(function (s) {
     var b = byBiz[s.business]; saleIds[s.id] = 1;
     b.count++; b.subtotal += num_(s.subtotal); b.discount += num_(s.discount); b.sales += num_(s.total); b.cost += num_(s.cost); b[s.method] += num_(s.total);
@@ -1161,12 +1368,15 @@ function report_(u, d) {
   var balances = BIZ.filter(function (b) { return biz.indexOf(b) >= 0; }).map(function (b) {
     var sh = table_('Shifts').rows.filter(function (s) { return s.business === b; });
     var closed = sh.filter(function (s) { return s.status === 'closed'; }).pop();
-    var open = sh.filter(function (s) { return s.status === 'open'; }).map(function (s) { var t = shiftTotals_(s); return { id: s.id, userName: s.userName, openTs: s.openTs, expectedCash: t.expectedCash, expectedZaad: t.expectedZaad, expectedEd: t.expectedEd, saleCount: t.saleCount }; });
+    var open = sh.filter(function (s) { return s.status === 'open'; }).map(function (s) { var t = shiftTotals_(s); return { id: s.id, userName: s.userName, openTs: s.openTs, expectedCash: t.expectedCash, expectedZaad: t.expectedZaad, expectedEd: t.expectedEd, saleCount: t.saleCount, eCashSH: t.eCashSH, eCashUSD: t.eCashUSD }; });
     var rate = closed ? num_(closed.rate) || rate_() : rate_();
     return { business: b, last: closed ? { closeTs: closed.closeTs, userName: closed.userName, cash: num_(closed.closeCash), zaad: num_(closed.closeZaadSH) + num_(closed.closeZaadUSD) * rate,
              edahab: num_(closed.closeEdSH) + num_(closed.closeEdUSD) * rate, diffCash: num_(closed.diffCash), diffZaad: num_(closed.diffZaad), diffEd: num_(closed.diffEd) } : null, open: open };
   });
-  var shifts = table_('Shifts').rows.filter(inR).map(clean_);
+  var shifts = table_('Shifts').rows.filter(inR).map(function (x) { return Object.assign(clean_(x), lateInfo_(x)); });
+  var cashMoves = table_('CashMoves').rows.filter(inR).map(clean_);
+  var undone = table_('Sales').rows.filter(function (x) { return inR(x) && GONE[x.status]; })
+    .map(function (x) { return { id: x.id, ts: x.ts, userName: x.userName, total: num_(x.total), method: x.method, status: x.status, undoneBy: x.undoneBy, reason: x.undoReason }; });
   var top = Object.keys(items).map(function (k) { var i = items[k]; if (!profitOk) delete i.profit; return i; });
   return {
     ok: true, from: from, to: to, business: biz, byBiz: byBiz, totals: totals,
@@ -1176,7 +1386,7 @@ function report_(u, d) {
     slowItems: prods.filter(function (p) { return !items[p.id]; }).slice(0, 20).map(function (p) { return { id: p.id, name: p.name, stock: p.stock }; }),
     expenses: Object.keys(expCats).map(function (k) { return expCats[k]; }),
     lowStock: lowStock, lowIngredients: lowIng, expiring: expiring, debts: debts, totalDebt: debts.reduce(function (a, c) { return a + c.balance; }, 0),
-    suppliersOwed: supOwed, balances: balances, shifts: shifts,
+    suppliersOwed: supOwed, balances: balances, shifts: shifts, cashMoves: cashMoves, undone: undone,
     pendingRefunds: table_('Refunds').rows.filter(function (r) { return r.status === 'pending' && biz.indexOf(r.business) >= 0; }).length,
     openOrders: table_('PurchaseOrders').rows.filter(function (o) { return o.status === 'SENT' && biz.indexOf(o.business) >= 0; }).length,
     profitVisible: profitOk
@@ -1190,6 +1400,7 @@ function onOpen() {
     .addItem('1. Run setup (safe to repeat)', 'setup')
     .addItem('2. Back up now', 'backupNow')
     .addItem('3. Reset an owner PIN (shows new PIN)', 'emergencyResetOwnerPin')
+    .addItem('4. Send email reports now (test)', 'dailyEmails')
     .addToUi();
 }
 
@@ -1225,8 +1436,20 @@ function setup() {
       shown.push(x[0] + ': ' + pin);
     });
   }
-  var hasTrigger = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'dailyBackup'; });
-  if (!hasTrigger) ScriptApp.newTrigger('dailyBackup').timeBased().atHour(3).everyDays(1).inTimezone(TZ).create();
+  var trig = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  if (trig.indexOf('dailyBackup') < 0) ScriptApp.newTrigger('dailyBackup').timeBased().atHour(3).everyDays(1).inTimezone(TZ).create();
+  if (trig.indexOf('dailyEmails') < 0) ScriptApp.newTrigger('dailyEmails').timeBased().atHour(23).nearMinute(30).everyDays(1).inTimezone(TZ).create();
+  // v1.2: employees get "undo own sales" and "take cash out" by default (once)
+  if (setting_('permsV2') !== '1') {
+    table_('Users').rows.forEach(function (x) {
+      if (x.role === 'owner') return;
+      var p = []; try { p = JSON.parse(x.perms || '[]'); } catch (e) {}
+      ['undoSales', 'cashOut'].forEach(function (k) { if (p.indexOf(k) < 0) p.push(k); });
+      x.perms = JSON.stringify(p); update_('Users', x);
+    });
+    setSetting_('permsV2', '1');
+  }
+  try { MailApp.getRemainingDailyQuota(); } catch (e) {}   // asks for permission to send email reports
   var msg = 'Saado POS setup done (version ' + VERSION + ').' + (shown.length ? '\n\nNew PINs (write them down, they are not shown again):\n' + shown.join('\n') : '');
   Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
@@ -1263,4 +1486,332 @@ function emergencyResetOwnerPin() {
   CacheService.getScriptCache().remove('lock_' + o.id);
   var msg = 'New PIN for ' + o.name + ': ' + pin;
   Logger.log(msg); try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
+}
+
+/* ============================== v1.2 helpers: owner tools, shift times, insights, emails, reset, archive ============================== */
+
+function needOwner_(u) { if (!isOwner_(u)) throw new Error('NOPERM: owners only'); }
+function deleteRow_(name, o) { table_(name).sh.deleteRow(o._r); T_[name] = null; }
+function clear_(name) {
+  var t = table_(name), last = t.sh.getLastRow();
+  if (last > 1) t.sh.getRange(2, 1, last - 1, t.headers.length).clearContent();
+  T_[name] = null;
+}
+function rewrite_(name, rows) {
+  var t = table_(name), last = t.sh.getLastRow();
+  if (last > 1) t.sh.getRange(2, 1, last - 1, t.headers.length).clearContent();
+  if (rows.length) t.sh.getRange(2, 1, rows.length, t.headers.length).setValues(rows.map(function (o) { return rowArr_(t, o); }));
+  T_[name] = null;
+}
+function setSetting_(k, v) {
+  var row = table_('Settings').rows.filter(function (r) { return r.key === k; })[0];
+  if (row) { row.value = String(v); update_('Settings', row); } else insert_('Settings', { key: k, value: String(v), note: (DEFAULT_SETTINGS[k] || ['', ''])[1] });
+  T_._settings = null;
+}
+function fmt_(n) { return String(Math.round(num_(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function esc_(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function addDaysIso_(ds, n) { var d = new Date(Date.UTC(+ds.slice(0, 4), +ds.slice(5, 7) - 1, +ds.slice(8, 10) + n, 12)); return d.toISOString().slice(0, 10); }
+function daysIn_(m) { return new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).getUTCDate(); }
+function shiftMonth_(m, n) { var d = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)); return d.toISOString().slice(0, 7); }
+var MONTHS_ = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function monthLabel_(ds) { return MONTHS_[+ds.slice(5, 7) - 1] + ' ' + ds.slice(0, 4); }
+function isoMinutes_(iso) { var m = String(iso).match(/^(\d+)-(\d+)-(\d+)T(\d+):(\d+)/); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 60000 : 0; }
+function hhmm_(mins) { mins = ((mins % 1440) + 1440) % 1440; return ('0' + Math.floor(mins / 60)).slice(-2) + ':' + ('0' + mins % 60).slice(-2); }
+
+// When a shift should have started, and how late it was.
+function lateInfo_(s) {
+  var open = String(s.openTs || '').slice(11, 16); if (!open) return {};
+  var om = toMin_(open);
+  var starts = s.business === 'food' ? [toMin_(setting_('food_open'))] : String(setting_('shop_hours')).split(',').map(function (r) { return toMin_(r.split('-')[0]); });
+  var sched = starts.reduce(function (b, x) { return Math.abs(x - om) < Math.abs(b - om) ? x : b; }, starts[0]);
+  var late = om - sched, lm = num_(setting_('lateMin')) || 10;
+  return { scheduled: hhmm_(sched), lateBy: late > lm ? late : 0, onTime: late <= lm, worked: s.closeTs ? Math.max(0, isoMinutes_(s.closeTs) - isoMinutes_(s.openTs)) : '' };
+}
+
+/* ---------- insights ---------- */
+function monthTotals_(u, bizParam, m) {
+  var r = report_(u, { business: bizParam, from: m + '-01', to: m + '-' + ('0' + daysIn_(m)).slice(-2) }), t = r.totals;
+  var out = { sales: t.netSales, profit: t.profit, expenses: t.expenses, count: t.count, fromArchive: false };
+  if (!t.count) {   // month already archived: use the saved monthly totals
+    var biz = bizFilter_(u, bizParam), rows = table_('MonthlySummary').rows.filter(function (x) { return x.month === m && biz.indexOf(x.business) >= 0; });
+    if (rows.length) {
+      out = { sales: 0, profit: 0, expenses: 0, count: 0, fromArchive: true };
+      rows.forEach(function (x) { out.sales += num_(x.netSales); out.profit += num_(x.profit); out.expenses += num_(x.expenses); out.count += num_(x.count); });
+      if (!can_(u, 'viewProfit')) delete out.profit;
+    }
+  }
+  return out;
+}
+function insights_(u, d) {
+  var biz = bizFilter_(u, d.business);
+  var month = /^\d{4}-\d{2}$/.test(d.month || '') ? d.month : today_().slice(0, 7), prev = shiftMonth_(month, -1);
+  var cur = monthTotals_(u, d.business, month), last = monthTotals_(u, d.business, prev);
+  var dailyCur = [], dailyPrev = [], i;
+  for (i = 0; i < daysIn_(month); i++) dailyCur.push(0);
+  for (i = 0; i < daysIn_(prev); i++) dailyPrev.push(0);
+  var since = addDaysIso_(today_(), -90), dow = [0, 0, 0, 0, 0, 0, 0], heat = [], late = {}, food = { all: 0, after23: 0, days: {} };
+  for (i = 0; i < 7; i++) { heat.push([]); for (var h = 0; h < 24; h++) heat[i].push(0); }
+  var undone = {};
+  table_('Sales').rows.forEach(function (x) {
+    if (biz.indexOf(x.business) < 0) return;
+    if (GONE[x.status]) { if (x.date.slice(0, 7) === month) undone[x.userName] = (undone[x.userName] || 0) + 1; return; }
+    var tot = num_(x.total) - num_(x.refunded), m = x.date.slice(0, 7), day = +x.date.slice(8, 10);
+    if (m === month) dailyCur[day - 1] += tot; else if (m === prev) dailyPrev[day - 1] += tot;
+    if (x.date >= since) {
+      var wd = new Date(x.date + 'T12:00:00Z').getUTCDay(), hr = +String(x.ts).slice(11, 13);
+      dow[wd] += tot; heat[wd][hr] += tot;
+      if (x.business === 'food') { food.all += tot; if (hr >= 23 || hr < 5) { food.after23 += tot; food.days[x.date] = 1; } }
+    }
+  });
+  var att = {};
+  table_('Shifts').rows.forEach(function (s) {
+    if (biz.indexOf(s.business) < 0 || String(s.date).slice(0, 7) !== month) return;
+    var a = att[s.userName] || (att[s.userName] = { name: s.userName, shifts: 0, startSum: 0, late: 0, minutes: 0 });
+    var li = lateInfo_(s); a.shifts++; a.startSum += toMin_(String(s.openTs).slice(11, 16)); if (li.lateBy) a.late++; a.minutes += num_(li.worked);
+  });
+  var attendance = Object.keys(att).map(function (k) { var a = att[k]; return { name: a.name, shifts: a.shifts, avgStart: hhmm_(Math.round(a.startSum / a.shifts)), late: a.late, hours: Math.round(a.minutes / 60) }; });
+  var foodTip = null;
+  if (biz.indexOf('food') >= 0 && food.all > 0) foodTip = { sharePct: Math.round(food.after23 * 100 / food.all), perDay: Math.round(food.after23 / 90), close: setting_('food_close') };
+  return { ok: true, month: month, prev: prev, cur: cur, last: last, dailyCur: dailyCur, dailyPrev: dailyPrev, dow: dow, heat: heat, attendance: attendance,
+           undone: Object.keys(undone).map(function (k) { return { name: k, count: undone[k] }; }), foodTip: foodTip, profitVisible: can_(u, 'viewProfit') };
+}
+
+/* ---------- emails (sent from the owner's Gmail by Apps Script) ---------- */
+function recipientsFor_(kind) { return table_('Recipients').rows.filter(function (r) { return isOn_(r.active) && isOn_(r[kind]) && r.email; }); }
+function emailWrap_(title, inner) {
+  var url = setting_('appUrl');
+  return '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1d2733">' +
+    '<div style="text-align:center;padding:16px 0"><img src="' + esc_(url) + 'icons/logo.png" alt="Saado" style="height:84px"></div>' +
+    '<h2 style="color:#003366;margin:0 0 12px;font-size:20px">' + esc_(title) + '</h2>' + inner +
+    '<p style="color:#888;font-size:12px;margin-top:24px">Open the app: <a href="' + esc_(url) + '">' + esc_(url) + '</a><br>Change how often you get this: Saado POS → More → My email reports</p></div>';
+}
+function sendLowStock_(items) {
+  if (!isOn_(setting_('lowStockEmail'))) return;
+  var rs = recipientsFor_('lowStock'); if (!rs.length) return;
+  var subj = items.length === 1 ? 'Low stock: ' + items[0].name + ' — ' + items[0].stock + ' left' : 'Low stock: ' + items.length + ' items need ordering';
+  var rows = items.map(function (x) { return '<tr><td style="padding:8px;border-bottom:1px solid #eee">' + esc_(x.name) + '</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#C62828;font-weight:bold">' + fmt_(x.stock) + ' left</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#888">warn at ' + fmt_(x.lowStock) + '</td></tr>'; }).join('');
+  var html = emailWrap_('Low stock', '<table style="width:100%;border-collapse:collapse;font-size:15px">' + rows + '</table><p>Make a purchase order in Saado POS → More → Purchasing → "Add low-stock items".</p>');
+  MailApp.sendEmail({ to: rs.map(function (r) { return r.email; }).join(','), subject: subj, htmlBody: html, name: 'Saado POS' });
+}
+function dailyEmails() {
+  T_ = {};
+  var now = new Date(), wd = Utilities.formatDate(now, TZ, 'EEE'), tomorrow = Utilities.formatDate(new Date(now.getTime() + 86400000), TZ, 'dd');
+  sendReport_('daily');
+  if (wd === String(setting_('weeklyDay') || 'Thu')) sendReport_('weekly');
+  if (tomorrow === '01') sendReport_('monthly');
+}
+function sendReport_(kind, only, test) {
+  var rs = only || recipientsFor_(kind); if (!rs.length) return 0;
+  var td = today_(), from = kind === 'daily' ? td : kind === 'weekly' ? addDaysIso_(td, -6) : td.slice(0, 8) + '01';
+  var label = kind === 'daily' ? Utilities.formatDate(new Date(), TZ, 'EEEE d MMMM') : kind === 'weekly' ? from + ' to ' + td : monthLabel_(td);
+  var title = (kind === 'daily' ? 'Daily report — ' : kind === 'weekly' ? 'Weekly report — ' : 'Monthly report — ') + label;
+  var owner = table_('Users').rows.filter(function (x) { return x.role === 'owner' && isOn_(x.active); })[0];
+  rs.forEach(function (r) {
+    var viewer = r.userId ? find_('Users', r.userId) : owner;
+    if (!viewer || !isOn_(viewer.active)) viewer = owner;
+    var rep = report_(viewer, { business: 'all', from: from, to: td });
+    MailApp.sendEmail({ to: r.email, subject: (test ? '[Test] ' : '') + 'Saado · ' + title, htmlBody: reportEmailHtml_(title, rep, kind), name: 'Saado POS' });
+  });
+  return rs.length;
+}
+function reportEmailHtml_(title, r, kind) {
+  var T = r.totals, td = 'padding:7px 0;border-bottom:1px solid #eee', tr = function (a, b) { return '<tr><td style="' + td + '">' + a + '</td><td style="' + td + ';text-align:right">' + b + '</td></tr>'; };
+  var bizNames = { shop: setting_('shopName') || 'Shop', food: setting_('foodName') || 'Fast Food' };
+  var h = '<div style="background:#003366;color:#fff;border-radius:14px;padding:16px;text-align:center"><div style="opacity:.8">Sales · ' + r.business.map(function (b) { return esc_(bizNames[b]); }).join(' + ') + '</div>' +
+    '<div style="font-size:30px;font-weight:800;color:#FFBF00">' + fmt_(T.netSales) + ' SH</div><div style="opacity:.8">' + T.count + ' sales' + (r.profitVisible ? ' · Profit ' + fmt_(T.profit) + ' SH' : '') + '</div></div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-top:12px">' + tr('Cash', fmt_(T.cash)) + tr('Zaad', fmt_(T.zaad)) + tr('Edahab', fmt_(T.edahab)) + tr('Credit', fmt_(T.credit)) +
+    tr('Expenses', '−' + fmt_(T.expenses + T.stockPurchases)) + tr('Refunds', '−' + fmt_(T.refunds)) + tr('Debt payments received', fmt_(T.custPay));
+  var out = {}; (r.cashMoves || []).forEach(function (m) { var k = m.takenBy + ' ' + m.currency; out[k] = (out[k] || 0) + num_(m.amount); });
+  Object.keys(out).forEach(function (k) { var p = k.split(' '); h += tr('Cash taken out (' + esc_(p[0]) + ')', (p[1] === 'USD' ? '$' : '') + fmt_(out[k]) + (p[1] === 'USD' ? '' : ' SH')); });
+  h += '</table>';
+  if (r.business.length > 1) h += '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-top:12px">' + r.business.map(function (b) { return tr(esc_(bizNames[b]), fmt_(r.byBiz[b].netSales) + ' SH · ' + r.byBiz[b].count + ' sales'); }).join('') + '</table>';
+  var sh = (r.shifts || []).map(function (s) {
+    var diff = s.status === 'closed' ? (Math.round(num_(s.diffAll !== '' && s.diffAll !== undefined ? s.diffAll : s.diffCash)) === 0 ? 'money correct ✔' : '<span style="color:#C62828">' + (num_(s.diffAll || s.diffCash) < 0 ? fmt_(-num_(s.diffAll || s.diffCash)) + ' short' : fmt_(s.diffAll || s.diffCash) + ' extra') + '</span>') : 'open';
+    return esc_(s.userName) + ' ' + String(s.openTs).slice(11, 16) + (s.closeTs ? '–' + String(s.closeTs).slice(11, 16) : '') + ' · ' + diff + (s.lateBy ? ' · ' + s.lateBy + ' min late' : '');
+  });
+  if (sh.length && kind === 'daily') h += '<h3 style="color:#003366;font-size:15px;margin:18px 0 6px">Shifts</h3><div style="font-size:14px;line-height:1.7">' + sh.join('<br>') + '</div>';
+  var att = [];
+  if (r.lowStock.length) att.push('Low stock: ' + r.lowStock.slice(0, 12).map(function (p) { return esc_(p.name) + ' (' + fmt_(p.stock) + ')'; }).join(', '));
+  if ((r.undone || []).length) att.push('Undone sales: ' + r.undone.length + ' (' + r.undone.slice(0, 5).map(function (x) { return esc_(x.userName) + ', “' + esc_(x.reason) + '”'; }).join('; ') + ')');
+  if (r.pendingRefunds) att.push('Refund requests waiting: ' + r.pendingRefunds);
+  if (r.openOrders) att.push('Purchase orders waiting for delivery: ' + r.openOrders);
+  att.push('Customer debts: ' + fmt_(r.totalDebt) + ' SH');
+  h += '<h3 style="color:#003366;font-size:15px;margin:18px 0 6px">Needs attention</h3><div style="font-size:14px;line-height:1.7">' + att.join('<br>') + '</div>';
+  if (r.topItems.length) h += '<h3 style="color:#003366;font-size:15px;margin:18px 0 6px">Best sellers</h3><div style="font-size:14px;line-height:1.7">' + r.topItems.slice(0, 5).map(function (i) { return esc_(i.name) + ' ×' + fmt_(i.qty); }).join('<br>') + '</div>';
+  return emailWrap_(title, h);
+}
+
+/* ---------- data size, reset, archive ---------- */
+var HISTORY_ = ['Sales', 'SaleItems', 'Shifts', 'CashMoves', 'Expenses', 'Refunds', 'CustLedger', 'SupLedger', 'PurchaseOrders', 'StockLog', 'IngLog', 'Audit'];
+function folder_(parent, name) {
+  var it = parent ? parent.getFoldersByName(name) : DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : (parent ? parent.createFolder(name) : DriveApp.createFolder(name));
+}
+function archiveRoot_() {
+  var root = folder_(null, 'Saado POS Archive');
+  if (!root.getFilesByName('README — do not delete.txt').hasNext())
+    root.createFile('README — do not delete.txt', 'Saado POS Archive.\nOld data moved out of the live Sheet, and safety copies made before every reset.\nThe app never deletes anything in this folder.');
+  return root;
+}
+function safetyCopy_(label) {
+  var sub = folder_(archiveRoot_(), 'Resets');
+  var name = 'Saado POS · ' + label + ' ' + Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HHmm');
+  var f = DriveApp.getFileById(ss_().getId()).makeCopy(name, sub);
+  return { name: name, url: f.getUrl() };
+}
+function adminCounts_() {
+  var c = {}; Object.keys(SCHEMA).forEach(function (n) { c[n] = table_(n).rows.length; });
+  var debt = table_('Customers').rows.reduce(function (a, x) { return a + Math.max(0, num_(x.balance)); }, 0);
+  var owed = table_('Suppliers').rows.reduce(function (a, x) { return a + Math.max(0, num_(x.balance)); }, 0);
+  var backups = 0;
+  try { var it = DriveApp.getFoldersByName('Saado POS Backups'); if (it.hasNext()) { var f = it.next().getFiles(); while (f.hasNext()) { f.next(); backups++; } } } catch (e) {}
+  var hist = HISTORY_.reduce(function (a, n) { return a + c[n]; }, 0), first = '';
+  table_('Sales').rows.forEach(function (x) { if (!first || x.date < first) first = x.date; });
+  var links = []; try { links = JSON.parse(setting_('archiveLinks') || '[]'); } catch (e) {}
+  return { ok: true, counts: c, customerDebt: debt, supplierOwed: owed, backups: backups, historyRows: hist, salesRows: c.Sales + c.SaleItems, limit: 30000,
+           firstDate: first, archivedUntil: setting_('archivedUntil'), archiveLinks: links,
+           employees: table_('Users').rows.filter(function (x) { return x.role !== 'owner'; }).map(function (x) { return x.name; }) };
+}
+function reset_(u, d) {
+  if (String(d.confirm || '').trim().toUpperCase() !== 'RESET') throw new Error('Type RESET to confirm');
+  if (hash_(u.salt, String(d.pin || '')) !== u.pinHash) throw new Error('Wrong PIN');
+  var parts = (d.parts || []).filter(function (p) { return RESET_PARTS_[p]; });
+  if (!parts.length) throw new Error('Tick at least one thing to reset');
+  var copy = safetyCopy_('Before reset');
+  parts.forEach(function (p) { RESET_PARTS_[p](u); });
+  setSetting_('dataVersion', num_(setting_('dataVersion')) + 1);
+  audit_(u, 'reset', { parts: parts, safetyCopy: copy.name });
+  return { ok: true, parts: parts, safetyCopy: copy, dataVersion: setting_('dataVersion') };
+}
+var RESET_PARTS_ = {
+  sales: function () { clear_('Sales'); clear_('SaleItems'); clear_('Refunds'); clear_('MonthlySummary'); table_('Products').rows.forEach(function (p) { if (num_(p.sold)) { p.sold = 0; update_('Products', p); } }); },
+  shifts: function () { clear_('Shifts'); clear_('CashMoves'); },
+  expenses: function () { clear_('Expenses'); },
+  customers: function () { clear_('Customers'); clear_('CustLedger'); },
+  custBalances: function (u) {
+    table_('Customers').rows.forEach(function (c) {
+      var b = num_(c.balance); if (!b) return;
+      insert_('CustLedger', { id: uid_('CL'), ts: nowIso_(), date: today_(), business: c.business, customerId: c.id, type: 'reset', amount: -b, method: '', ref: '', shiftId: '', userName: u.name, note: 'Balance reset' });
+      c.balance = 0; update_('Customers', c);
+    });
+  },
+  suppliers: function () { clear_('Suppliers'); clear_('SupLedger'); clear_('PurchaseOrders'); },
+  supBalances: function (u) {
+    table_('Suppliers').rows.forEach(function (s) {
+      var b = supBalance_(s); if (!b) return;
+      insert_('SupLedger', { id: uid_('SA'), ts: nowIso_(), date: today_(), business: s.business, supplierId: s.id, type: 'adjust', amount: -b, paid: 0, method: '', items: '', userName: u.name, note: 'Balance reset', ref: '' });
+      supBalance_(s);
+    });
+  },
+  products: function () { clear_('Products'); clear_('StockLog'); },
+  stockQty: function (u) {
+    var now = nowIso_();
+    table_('Products').rows.forEach(function (p) {
+      if (p.business !== 'shop' || !num_(p.stock)) return;
+      insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'reset', before: num_(p.stock), after: 0, diff: -num_(p.stock), userName: u.name, note: '' });
+      p.stock = 0; update_('Products', p);
+    });
+  },
+  ingredients: function (u) {
+    table_('Ingredients').rows.forEach(function (g) {
+      if (!num_(g.stock)) return;
+      insert_('IngLog', { id: uid_('IL'), ts: nowIso_(), date: today_(), ingredientId: g.id, name: g.name, type: 'set', qty: -num_(g.stock), userName: u.name, note: 'reset' });
+      g.stock = 0; update_('Ingredients', g);
+    });
+  },
+  employees: function () {
+    var keep = table_('Users').rows.filter(function (x) { return x.role === 'owner'; }), gone = {};
+    table_('Users').rows.forEach(function (x) { if (x.role !== 'owner') gone[x.id] = 1; });
+    rewrite_('Users', keep);
+    table_('Recipients').rows.forEach(function (r) { if (gone[r.userId]) { r.active = 0; update_('Recipients', r); } });
+  },
+  audit: function () { clear_('Audit'); },
+  settings: function () {
+    table_('Settings').rows.forEach(function (r) { if (DEFAULT_SETTINGS[r.key] && !PROTECTED_SETTINGS[r.key]) { r.value = DEFAULT_SETTINGS[r.key][0]; update_('Settings', r); } });
+    T_._settings = null;
+  },
+  backups: function () {
+    var it = DriveApp.getFoldersByName('Saado POS Backups');
+    if (it.hasNext()) { var f = it.next().getFiles(); while (f.hasNext()) f.next().setTrashed(true); }
+  }
+};
+
+var ARCHIVE_RULES_ = {
+  Sales: function (r, c) { return r.date < c; }, SaleItems: function (r, c) { return r.date < c; },
+  Shifts: function (r, c) { return r.status === 'closed' && r.date < c; }, CashMoves: function (r, c) { return r.date < c; },
+  Expenses: function (r, c) { return r.date < c; }, Refunds: function (r, c) { return r.status !== 'pending' && r.date < c; },
+  CustLedger: function (r, c) { return r.date < c && r.type !== 'opening'; }, SupLedger: function (r, c) { return r.date < c && r.type !== 'opening'; },
+  PurchaseOrders: function (r, c) { return (r.status === 'RECEIVED' || r.status === 'CANCELLED') && r.date < c; },
+  StockLog: function (r, c) { return r.date < c; }, IngLog: function (r, c) { return r.date < c; }, Audit: function (r, c) { return dateOf_(r.ts) < c; }
+};
+function monthlySummary_(sales, expenses, refunds) {
+  var m = {}, row = function (mon, b) { var k = mon + '|' + b; return m[k] || (m[k] = { month: mon, business: b, count: 0, sales: 0, refunds: 0, refundCost: 0, netSales: 0, cost: 0, expenses: 0, profit: 0, cash: 0, zaad: 0, edahab: 0, credit: 0 }); };
+  sales.forEach(function (x) { if (GONE[x.status]) return; var r = row(x.date.slice(0, 7), x.business); r.count++; r.sales += num_(x.total); r.cost += num_(x.cost); r[x.method] = (r[x.method] || 0) + num_(x.total); });
+  refunds.forEach(function (x) { if (x.status !== 'approved') return; var r = row(dateOf_(x.decidedTs || x.ts).slice(0, 7), x.business); r.refunds += num_(x.amount); r.refundCost += num_(x.cost); });
+  expenses.forEach(function (x) { if (x.category === 'Supplier purchases') return; row(x.date.slice(0, 7), x.business).expenses += num_(x.amount); });
+  return Object.keys(m).sort().map(function (k) { var r = m[k]; r.netSales = r.sales - r.refunds; r.profit = r.netSales - (r.cost - r.refundCost) - r.expenses; r.updatedAt = nowIso_(); return r; });
+}
+function writeTab_(ss, name, headers, rows) {
+  var sh = ss.insertSheet(name);
+  sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#003366').setFontColor('#FFFFFF');
+  if (rows.length) sh.getRange(2, 1, rows.length, headers.length).setNumberFormat('@').setValues(rows);
+  sh.setFrozenRows(1);
+  return sh;
+}
+function archive_(u, cutoff, dry) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoff || '')) throw new Error('Choose a date');
+  if (cutoff > today_()) throw new Error('The date cannot be in the future');
+  var moved = {}, kept = {}, counts = {}, total = 0, first = '';
+  Object.keys(ARCHIVE_RULES_).forEach(function (n) {
+    var rows = table_(n).rows, test = ARCHIVE_RULES_[n];
+    moved[n] = rows.filter(function (r) { return test(r, cutoff); }); kept[n] = rows.filter(function (r) { return !test(r, cutoff); });
+    counts[n] = moved[n].length; total += moved[n].length;
+    moved[n].forEach(function (r) { var dt = r.date || dateOf_(r.ts); if (dt && (!first || dt < first)) first = dt; });
+  });
+  if (!total) { if (dry) return { ok: true, total: 0, counts: counts }; throw new Error('There is no data older than this date'); }
+  var lastDay = addDaysIso_(cutoff, -1), name = monthLabel_(first) + ' – ' + monthLabel_(lastDay);
+  if (dry) return { ok: true, total: total, counts: counts, name: name, from: first, to: lastDay };
+
+  backup_('before-archive');
+  var folder = folder_(archiveRoot_(), name);
+  var arch = SpreadsheetApp.create('Saado POS Archive · ' + name);
+  DriveApp.getFileById(arch.getId()).moveTo(folder);
+  var summary = monthlySummary_(moved.Sales, moved.Expenses, moved.Refunds), SH = SCHEMA.MonthlySummary;
+  writeTab_(arch, 'Summary', SH, summary.map(function (r) { return SH.map(function (h) { return cellVal_(r[h]); }); }));
+  Object.keys(moved).forEach(function (n) { if (moved[n].length) writeTab_(arch, n, SCHEMA[n], moved[n].map(function (r) { return SCHEMA[n].map(function (h) { return cellVal_(r[h]); }); })); });
+  var bal = [['type', 'name', 'business', 'phone', 'balance / stock']];
+  table_('Customers').rows.forEach(function (c) { bal.push(['customer', c.name, c.business, c.phone, num_(c.balance)]); });
+  table_('Suppliers').rows.forEach(function (s) { bal.push(['supplier', s.name, s.business, s.phone, num_(s.balance)]); });
+  table_('Products').rows.forEach(function (p) { if (!isOn_(p.deleted)) bal.push(['product', p.name, p.business, '', p.business === 'shop' ? num_(p.stock) : '']); });
+  writeTab_(arch, 'Balances', bal[0], bal.slice(1).map(function (r) { return r.map(cellVal_); }));
+  arch.getSheets().forEach(function (sh) { if (!SCHEMA[sh.getName()] && ['Summary', 'Balances'].indexOf(sh.getName()) < 0 && arch.getSheets().length > 1) arch.deleteSheet(sh); });
+
+  // carry balances forward, so every customer and supplier balance stays exactly the same
+  var ts = cutoff + 'T00:00:00', cOpen = {}, sOpen = {};
+  moved.CustLedger.forEach(function (l) {
+    var a = num_(l.amount), k = l.customerId; cOpen[k] = cOpen[k] || { biz: l.business, amt: 0 };
+    cOpen[k].amt += l.type === 'sale' ? a : (l.type === 'reset' || l.type === 'opening') ? a : -a;
+  });
+  moved.SupLedger.forEach(function (l) {
+    var k = l.supplierId; sOpen[k] = sOpen[k] || { biz: l.business, amt: 0 };
+    sOpen[k].amt += l.type === 'purchase' ? num_(l.amount) - num_(l.paid) : l.type === 'receipt' ? num_(l.amount) : l.type === 'payment' ? -num_(l.amount) : num_(l.amount);
+  });
+  var cRows = Object.keys(cOpen).filter(function (k) { return cOpen[k].amt; }).map(function (k) { return { id: uid_('CL'), ts: ts, date: cutoff, business: cOpen[k].biz, customerId: k, type: 'opening', amount: cOpen[k].amt, method: '', ref: '', shiftId: '', userName: u.name, note: 'Carried forward from archive ' + name }; });
+  var sRows = Object.keys(sOpen).filter(function (k) { return sOpen[k].amt; }).map(function (k) { return { id: uid_('SO'), ts: ts, date: cutoff, business: sOpen[k].biz, supplierId: k, type: 'opening', amount: sOpen[k].amt, paid: 0, method: '', items: '', userName: u.name, note: 'Carried forward from archive ' + name, ref: '' }; });
+  Object.keys(kept).forEach(function (n) { rewrite_(n, n === 'CustLedger' ? cRows.concat(kept[n]) : n === 'SupLedger' ? sRows.concat(kept[n]) : kept[n]); });
+
+  // keep monthly totals in the app for Insights
+  var ms = table_('MonthlySummary').rows.filter(function (r) { return !summary.some(function (x) { return x.month === r.month && x.business === r.business; }); });
+  rewrite_('MonthlySummary', ms.concat(summary));
+
+  var pdfHtml = '<h1 style="font-family:Arial;color:#003366">Saado POS — ' + esc_(name) + '</h1><table style="font-family:Arial;border-collapse:collapse;font-size:12px" border="1" cellpadding="5"><tr><th>Month</th><th>Business</th><th>Sales</th><th>Refunds</th><th>Expenses</th><th>Profit</th><th>Sales #</th></tr>' +
+    summary.map(function (r) { return '<tr><td>' + r.month + '</td><td>' + r.business + '</td><td>' + fmt_(r.netSales) + '</td><td>' + fmt_(r.refunds) + '</td><td>' + fmt_(r.expenses) + '</td><td>' + fmt_(r.profit) + '</td><td>' + r.count + '</td></tr>'; }).join('') + '</table>';
+  try { folder.createFile(Utilities.newBlob(pdfHtml, 'text/html', 'summary.html').getAs('application/pdf').setName('Summary ' + name + '.pdf')); } catch (e) {}
+
+  if (!setting_('archivedUntil') || cutoff > setting_('archivedUntil')) setSetting_('archivedUntil', cutoff);
+  var links = []; try { links = JSON.parse(setting_('archiveLinks') || '[]'); } catch (e) {}
+  links.push({ name: name, url: arch.getUrl(), from: first, to: lastDay, at: nowIso_() });
+  setSetting_('archiveLinks', JSON.stringify(links));
+  audit_(u, 'archive', { period: name, rows: total });
+  return { ok: true, total: total, counts: counts, name: name, url: arch.getUrl() };
 }

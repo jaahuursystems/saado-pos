@@ -65,11 +65,18 @@
       return;
     }
     if (!v) {
-      const list = prods().slice().sort((a, b) => (num(b.fav) - num(a.fav)) || (num(b.sold) - num(a.sold)) || String(a.name).localeCompare(b.name)).slice(0, S.biz === 'food' ? 60 : 24);
-      box.innerHTML = `<div class="small muted" style="margin:2px 0 6px">${esc(S.biz === 'food' ? t('Menu') : t('Most sold'))}</div>
-        <div class="tiles">${list.map(p => `<button class="tile ${S.biz === 'shop' && num(p.stock) <= num(p.lowStock) ? 'low' : ''}" data-id="${esc(p.id)}">
-          <span class="n">${esc(p.name)}</span><span class="p">${fmt(p.price)}</span>${inCart(p.id) ? `<span class="q">${inCart(p.id)}</span>` : ''}</button>`).join('')}</div>`;
+      // every product, most sold first (stars on top), with category chips and the stock left
+      const all = prods(), cats = Array.from(new Set(all.map(p => String(p.category || '').trim()).filter(Boolean))).sort();
+      if (S.sellCat && cats.indexOf(S.sellCat) < 0) S.sellCat = '';
+      const list = all.filter(p => !S.sellCat || String(p.category || '').trim() === S.sellCat)
+        .sort((a, b) => (num(b.fav) - num(a.fav)) || (num(b.sold) - num(a.sold)) || String(a.name).localeCompare(b.name));
+      const showStock = S.biz === 'shop' && can('viewStock');
+      box.innerHTML = (cats.length ? `<div class="chips scroll" id="cats" style="margin-bottom:10px"><button class="chip ${!S.sellCat ? 'on' : ''}" data-c="">${esc(t('All'))} ${all.length}</button>${cats.map(c => `<button class="chip ${S.sellCat === c ? 'on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : '') +
+        `<div class="tiles">${list.slice(0, 400).map(p => { const low = S.biz === 'shop' && num(p.stock) <= num(p.lowStock); return `<button class="tile ${low ? 'low' : ''}" data-id="${esc(p.id)}">
+          <span class="n">${esc(p.name)}</span><span><span class="p">${fmt(p.price)}</span>${showStock ? `<br><span class="s ${low ? 'low' : ''}">${esc(t('Stock'))} ${fmt(p.stock)}</span>` : ''}</span>${inCart(p.id) ? `<span class="q">${inCart(p.id)}</span>` : ''}</button>`; }).join('')}</div>` +
+        (list.length > 400 ? `<p class="small muted center">${esc(t('Search to find more products.'))}</p>` : '');
       $$('.tile', box).forEach(b => b.onclick = () => { addToCart(findProd(b.dataset.id)); });
+      $$('#cats .chip', box).forEach(c => c.onclick = () => { S.sellCat = c.dataset.c; drawResults(); });
       return;
     }
     const list = matches(v).slice(0, 50);
@@ -97,10 +104,15 @@
     if (S.route !== 'sell' || !S.cart.length) return;
     const tt = cartTotals(0);
     const bar = document.createElement('div'); bar.className = 'cartbar';
-    bar.innerHTML = `<div class="inner"><button class="sum" id="openCart"><span class="cnt">${tt.count}</span><span class="grow"><b>${money(tt.total)}</b><span>${usd(tt.total)}</span></span></button>
+    bar.innerHTML = `<div class="inner"><button class="mini x" id="clrBtn" aria-label="${esc(t('Clear'))}">${I('x')}</button><button class="mini" id="parkBtn" aria-label="${esc(t('Park'))}">${I('pause')}</button>
+      <button class="sum" id="openCart"><span class="cnt">${tt.count}</span><span class="grow"><b>${money(tt.total)}</b><span>${usd(tt.total)}</span></span></button>
       <button class="btn gold lg pay" id="payBtn">${esc(t('Pay'))}</button></div>`;
     document.body.appendChild(bar);
-    $('#openCart').onclick = openCart; $('#payBtn').onclick = openPay;
+    $('#openCart').onclick = openCart; $('#payBtn').onclick = openPay; $('#parkBtn').onclick = park;
+    $('#clrBtn').onclick = () => {   // clears at once; "Undo" brings the cart back for 5 seconds
+      const saved = S.cart; S.cart = []; drawCartBar(); drawResults();
+      toast(t('Cart cleared'), '', 5000, { label: t('Undo'), fn: () => { S.cart = saved; drawCartBar(); drawResults(); } });
+    };
   }
   function openCart() {
     const sh = sheet({ title: t('Cart'), body: '<div id="cl"></div>', actions: [
@@ -163,7 +175,7 @@
     const credit = setting(biz + '_credit') === '1';
     const methods = ['cash', 'zaad', 'edahab'].concat(credit ? ['credit'] : []);
     const types = String(setting('food_orderTypes') || 'Take away').split(',').map(x => x.trim()).filter(Boolean);
-    let st = { method: 'cash', discount: 0, tendered: '', cur: 'SH', customerId: '', orderType: types[0] || '' };
+    let st = { method: 'cash', discount: 0, tendered: '', cur: 'SH', payCur: 'SH', customerId: '', orderType: types[0] || '' };
     const sh = sheet({ title: t('Payment') + ' · ' + bizLabel(), sticky: true, body: `
       <div class="totalbox"><div class="t" id="pt"></div><div class="u" id="pu"></div></div>
       ${biz === 'food' && types.length ? `<label class="f"><span>${esc(t('Order type'))}</span><div class="seg gold" id="otype">${types.map((x, i) => `<button data-v="${esc(x)}" class="${i === 0 ? 'on' : ''}">${esc(t(x))}</button>`).join('')}</div></label>` : ''}
@@ -196,9 +208,11 @@
         $$('#quick .chip', el).forEach(b => b.onclick = () => { st.tendered = b.dataset.v; $('#tend', el).value = st.tendered; drawChange(); });
         drawChange();
       } else if (st.method === 'zaad' || st.method === 'edahab') {
-        const acct = setting(biz + '_' + st.method);
-        box.innerHTML = `<div class="acct"><div class="muted">${esc(t('Customer sends to {m} account', { m: A.methodName(st.method) }))}</div><b>${esc(acct || '—')}</b>
-          <div class="bold">${money(tt.total)} · ${usd(tt.total)}</div></div><p class="small muted">${esc(t('Check the money arrived before completing.'))}</p>`;
+        const acct = setting(biz + '_' + st.method), usdAmt = (Math.ceil(tt.total / A.rate() * 100) / 100).toFixed(2);
+        box.innerHTML = `<label class="f"><span>${esc(t('Paid in'))}</span><div class="seg" id="pcur"><button data-v="SH" class="${st.payCur === 'SH' ? 'on' : ''}">${esc(t('Shillings (SH)'))}</button><button data-v="USD" class="${st.payCur === 'USD' ? 'on' : ''}">${esc(t('Dollars (USD)'))}</button></div></label>
+          <div class="acct"><div class="muted">${esc(t('Customer sends to {m} account', { m: A.methodName(st.method) }))}</div><b>${esc(acct || '—')}</b>
+          <div class="bold" style="font-size:20px">${st.payCur === 'USD' ? '$' + usdAmt : money(tt.total)}</div></div><p class="small muted">${esc(t('Check the money arrived before completing.'))}</p>`;
+        seg($('#pcur', el), v => { st.payCur = v; drawMethod(); });
       } else {
         const list = (S.data.customers || []).filter(c => c.business === biz);
         box.innerHTML = `<label class="f"><span>${esc(t('Credit customer'))}</span><div class="row"><input class="in grow" id="cq" placeholder="${esc(t('Search customer'))}">
@@ -227,6 +241,7 @@
         if (change < 0) throw new Error(t('Cash given is less than the total'));
       }
       const data = { id: A.uid('S'), business: biz, method: st.method, discount: tt.discount, tendered: st.method === 'cash' ? num(st.tendered) : 0, tenderCur: st.cur,
+        payCur: st.method === 'zaad' || st.method === 'edahab' ? st.payCur : 'SH',
         customerId: st.method === 'credit' ? st.customerId : '', orderType: biz === 'food' ? st.orderType : '', ts: new Date().toISOString(),
         items: S.cart.map(l => ({ productId: l.productId, qty: l.qty, name: l.name })) };
       enqueue('sale.create', data);
@@ -242,90 +257,210 @@
   }
 
   /* ======================= SHIFT ======================= */
+  // Expected money per account and currency. srv = totals from the server (or null); queued items still on this phone are added.
+  function liveTotals(sh, srv, moves) {
+    const k0 = ['cashInSH', 'cashInUSD', 'zaadInSH', 'zaadInUSD', 'edInSH', 'edInUSD', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'refCash', 'refZaad', 'refEd',
+      'cashOutSH', 'cashOutUSD', 'cashSales', 'zaadSales', 'edSales', 'creditSales', 'saleCount', 'undoneCount'];
+    const x = {}; k0.forEach(k => x[k] = srv ? num(srv[k]) : 0);
+    let waiting = 0;
+    S.queue.forEach(o => {
+      if (!o.data || o.data.business && o.data.business !== sh.business) return;
+      if (o.action === 'sale.create' && o.userId === S.user.id) {
+        const d = o.data, sub = d.items.reduce((a, it) => { const p = findProd(it.productId); return a + (p ? num(p.price) : 0) * num(it.qty); }, 0);
+        const tot = A.roundStep(sub - num(d.discount)); x.saleCount++; waiting++;
+        if (d.method === 'credit') { x.creditSales += tot; return; }
+        x[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[d.method]] += tot;
+        const k = { cash: 'cash', zaad: 'zaad', edahab: 'ed' }[d.method];
+        if (d.method === 'cash' && d.tenderCur === 'USD' && num(d.tendered) > 0) { x.cashInUSD += num(d.tendered); x.cashInSH -= num(d.tendered) * A.rate() - tot; }
+        else if (d.method !== 'cash' && d.payCur === 'USD') x[k + 'InUSD'] += Math.ceil(tot / A.rate() * 100) / 100;
+        else x[k + 'InSH'] += tot;
+      } else if (o.action === 'cust.pay' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['custPay' + k] += num(o.data.amount); waiting++; } }
+      else if (o.action === 'exp.create' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['exp' + k] += num(o.data.amount); waiting++; } }
+      else if (o.action === 'cash.out') { x[o.data.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num(o.data.amount); waiting++; }
+    });
+    const r2 = v => Math.round(v * 100) / 100;
+    x.eCashSH = num(sh.openCash) + x.cashInSH + x.custPayCash - x.expCash - x.refCash - x.cashOutSH;
+    x.eCashUSD = r2(num(sh.openCashUSD) + x.cashInUSD - x.cashOutUSD);
+    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD);
+    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD);
+    x.totalSH = x.eCashSH + x.eZaadSH + x.eEdSH; x.totalUSD = r2(x.eCashUSD + x.eZaadUSD + x.eEdUSD);
+    x.waiting = waiting; x.rate = num(sh.rate) || A.rate();
+    return x;
+  }
+  const usdF = v => '$' + (Math.round(num(v) * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });
   Screens.shift = function (main) {
     const sh = myShift();
     const others = (S.data.shifts || []).filter(s => s.status === 'open' && s.business === S.biz && s.userId !== S.user.id);
-    const amountFields = (pre) => `<div class="grid2">${moneyInput(pre + 'Cash', t('Cash in drawer (SH)'), '', 'autofocus')}<div></div>
-      ${moneyInput(pre + 'ZaadSH', t('Zaad balance SH'), '')}${moneyInput(pre + 'ZaadUSD', t('Zaad balance USD'), '', 'inputmode="decimal"')}
-      ${moneyInput(pre + 'EdSH', t('Edahab balance SH'), '')}${moneyInput(pre + 'EdUSD', t('Edahab balance USD'), '', 'inputmode="decimal"')}</div>`;
     if (!sh) {
-      main.innerHTML = `<div class="card"><h3>${esc(t('Start shift'))}</h3><p class="small muted">${esc(t('Count the money before you start.'))}</p>
-        <form id="of">${amountFields('open')}<button class="btn gold block lg">${esc(t('Start shift'))}</button></form></div>
-        ${others.length ? `<div class="card"><h3>${esc(t('Other open shifts'))}</h3>${others.map(s => `<div class="row"><span class="grow">${esc(s.userName)}</span><span class="muted">${esc(t('since'))} ${A.when(s.openTs)}</span></div>`).join('')}</div>` : ''}
+      main.innerHTML = `<div class="card"><h3 style="margin-top:0">${esc(t('Start shift'))}</h3><p class="small muted">${esc(t('Count the money before you start.'))}</p>
+        <form id="of"><div class="grid2">${moneyInput('openCash', t('Cash SH'), '', 'autofocus')}${moneyInput('openCashUSD', t('Cash USD'), '', 'inputmode="decimal"')}
+        ${moneyInput('openZaadSH', t('Zaad balance SH'), '')}${moneyInput('openZaadUSD', t('Zaad balance USD'), '', 'inputmode="decimal"')}
+        ${moneyInput('openEdSH', t('Edahab balance SH'), '')}${moneyInput('openEdUSD', t('Edahab balance USD'), '', 'inputmode="decimal"')}</div>
+        <button class="btn gold block lg">${I('clock')}${esc(t('Start shift'))}</button></form></div>
+        ${others.length ? `<div class="card"><h3 style="margin-top:0">${esc(t('Other open shifts'))}</h3>${others.map(s => `<div class="row"><span class="grow">${esc(s.userName)}</span><span class="muted">${esc(t('since'))} ${A.when(s.openTs)}</span></div>`).join('')}</div>` : ''}
         <div id="hist"></div>`;
       $('#of').onsubmit = e => {
         e.preventDefault();
-        const f = formData(e.target);
-        const data = { id: A.uid('SH'), business: S.biz, openCash: num(f.openCash), openZaadSH: num(f.openZaadSH), openZaadUSD: num(f.openZaadUSD), openEdSH: num(f.openEdSH), openEdUSD: num(f.openEdUSD) };
+        const f = formData(e.target), lp = A.localParts();
+        const data = { id: A.uid('SH'), business: S.biz, openCash: num(f.openCash), openCashUSD: num(f.openCashUSD), openZaadSH: num(f.openZaadSH), openZaadUSD: num(f.openZaadUSD), openEdSH: num(f.openEdSH), openEdUSD: num(f.openEdUSD) };
         enqueue('shift.open', data);
-        const lp = A.localParts(); S.data.shifts.push(Object.assign({ status: 'open', userId: S.user.id, userName: S.user.name, openTs: lp.date + 'T' + lp.time + ':00', rate: A.rate() }, data));
+        S.data.shifts.push(Object.assign({ status: 'open', userId: S.user.id, userName: S.user.name, openTs: lp.date + 'T' + lp.time + ':00', date: lp.date, rate: A.rate() }, data));
         A.saveData(); toast(t('Shift started'), 'ok'); go('sell');
       };
     } else {
-      main.innerHTML = `
-        <div class="card navy"><h3>${esc(t('Started'))} ${A.when(sh.openTs)}</h3><div class="grid2 small">
-          <div>${esc(t('Opening cash'))}<br><b>${money(sh.openCash)}</b></div><div>Zaad<br><b>${fmt(sh.openZaadSH)} SH + $${fmt(sh.openZaadUSD)}</b></div>
-          <div>Edahab<br><b>${fmt(sh.openEdSH)} SH + $${fmt(sh.openEdUSD)}</b></div></div></div>
-        <div id="live" class="card">${skel(1)}</div>
-        <div class="card"><h3>${esc(t('End shift'))}</h3><p class="small muted">${esc(t('Count the money now and enter what you have.'))}</p>
-          <form id="cf">${amountFields('close')}<label class="f"><span>${esc(t('Note'))}</span><input class="in" name="note"></label>
-          <button class="btn red block lg">${esc(t('End shift'))}</button></form></div>`;
+      main.innerHTML = `<div class="card navy"><div class="row"><div class="grow"><div class="small muted">${esc(t('Expected in the drawer now'))}</div><div class="big" id="expNow" style="color:var(--gold)">…</div></div>
+          <span class="pill green">${esc(t('Open'))}</span></div><div class="small muted" style="margin-top:4px">${esc(t('Started'))} ${A.when(sh.openTs)}</div></div>
+        ${can('cashOut') ? `<button class="btn block" id="co" style="margin-bottom:6px">${I('wallet')}${esc(t('Take cash out'))}</button>` : ''}
+        <div id="moves"></div><div id="mysales"></div>
+        <div class="card" id="endc"><h3 style="margin-top:0">${esc(t('End shift — count and type'))}</h3><div id="cmp"></div>
+          <label class="f" style="margin-top:10px"><span>${esc(t('Note'))}</span><input class="in" name="note" id="cnote"></label>
+          <button class="btn red block lg" id="endBtn">${I('lock')}${esc(t('End shift'))}</button></div>`;
+      if ($('#co')) $('#co').onclick = () => cashOutSheet(() => loadLive(sh));
+      $('#endBtn').onclick = e => withBusy(e.target.closest('button'), () => closeShift(sh));
       loadLive(sh);
-      $('#cf').onsubmit = e => { e.preventDefault(); withBusy(e.target.querySelector('button'), () => closeShift(sh, formData(e.target))); };
     }
     if (isOwner() || can('viewReports')) loadShiftHistory();
   };
   async function loadLive(sh) {
-    const draw = (srv) => {
-      const box = $('#live'); if (!box) return;
-      const keys = ['cashSales', 'zaadSales', 'edSales', 'creditSales', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'refCash', 'refZaad', 'refEd', 'saleCount'];
-      const x = {}; keys.forEach(k => x[k] = srv ? num(srv[k]) : 0);
-      // add what is still waiting on this phone, so totals are right even offline
-      let waiting = 0;
-      S.queue.forEach(o => {
-        if (o.userId !== S.user.id || !o.data) return;
-        const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method];
-        if (o.action === 'sale.create' && o.data.business === sh.business) {
-          const sub = o.data.items.reduce((a, it) => { const p = findProd(it.productId); return a + (p ? num(p.price) : 0) * num(it.qty); }, 0);
-          const tot = A.roundStep(sub - num(o.data.discount));
-          x[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales', credit: 'creditSales' }[o.data.method]] += tot; x.saleCount++; waiting++;
-        } else if (o.action === 'cust.pay' && k) { x['custPay' + k] += num(o.data.amount); waiting++; }
-        else if (o.action === 'exp.create' && o.data.business === sh.business && k) { x['exp' + k] += num(o.data.amount); waiting++; }
-      });
-      const rate = num(sh.rate) || A.rate();
-      x.expectedCash = num(sh.openCash) + x.cashSales + x.custPayCash - x.expCash - x.refCash;
-      x.expectedZaad = num(sh.openZaadSH) + num(sh.openZaadUSD) * rate + x.zaadSales + x.custPayZaad - x.expZaad - x.refZaad;
-      x.expectedEd = num(sh.openEdSH) + num(sh.openEdUSD) * rate + x.edSales + x.custPayEd - x.expEd - x.refEd;
-      box.innerHTML = `<h3>${esc(t('So far in this shift'))} (${x.saleCount} ${esc(t('sales'))})</h3><table class="tbl">
-        <tr><td>${esc(t('Cash sales'))}</td><td class="n">${fmt(x.cashSales)}</td></tr><tr><td>Zaad</td><td class="n">${fmt(x.zaadSales)}</td></tr>
-        <tr><td>Edahab</td><td class="n">${fmt(x.edSales)}</td></tr><tr><td>${esc(t('Credit'))}</td><td class="n">${fmt(x.creditSales)}</td></tr>
-        <tr><td>${esc(t('Customer payments (cash)'))}</td><td class="n">${fmt(x.custPayCash)}</td></tr><tr><td>${esc(t('Expenses (cash)'))}</td><td class="n">${neg(x.expCash)}</td></tr>
-        <tr><td>${esc(t('Refunds (cash)'))}</td><td class="n">${neg(x.refCash)}</td></tr>
-        <tr><td><b>${esc(t('Expected cash'))}</b></td><td class="n"><b>${money(x.expectedCash)}</b></td></tr>
-        <tr><td>${esc(t('Expected Zaad'))}</td><td class="n">${money(x.expectedZaad)}</td></tr><tr><td>${esc(t('Expected Edahab'))}</td><td class="n">${money(x.expectedEd)}</td></tr></table>
-        ${waiting ? `<p class="small muted" style="margin:8px 0 0">${esc(t('Includes {n} items saved on this phone, not sent yet.', { n: waiting }))}</p>` : ''}`;
+    let srv = null, moves = [];
+    const draw = () => {
+      if (!$('#cmp')) return;
+      const x = liveTotals(sh, srv);
+      $('#expNow').textContent = money(x.eCashSH) + (x.eCashUSD ? ' · ' + usdF(x.eCashUSD) : '');
+      // cash taken out (saved + waiting on this phone)
+      const qMoves = S.queue.filter(o => o.action === 'cash.out' && o.data.business === sh.business).map(o => Object.assign({ pending: 1, ts: o.ts, userName: o.userName }, o.data));
+      const allMoves = moves.concat(qMoves);
+      $('#moves').innerHTML = allMoves.length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${allMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div>
+        <div class="sub">${m.pending ? esc(t('Waiting to send')) : A.when(m.ts)} · ${esc(t(m.reason || ''))}${m.userName ? ' · ' + esc(t('recorded by {n}', { n: m.userName })) : ''}</div></div></div>`).join('')}</div>` : '';
+      drawCompare(sh, x);
+      drawMySales(sh);
     };
-    if (S.queue.some(o => o.data && o.data.id === sh.id)) return draw(null);   // shift itself not sent yet
+    if (S.queue.some(o => o.data && o.data.id === sh.id)) return draw();   // the shift itself is not sent yet
     const hit = A.cacheGet('shift.preview', { id: sh.id });
-    draw(hit ? hit.totals : null);
-    A.syncNow().then(() => A.cachedCall('shift.preview', { id: sh.id }, r => draw(r.totals))).catch(() => {});
+    if (hit) { srv = hit.totals; moves = hit.moves || []; }
+    draw();
+    A.syncNow().then(() => A.cachedCall('shift.preview', { id: sh.id }, r => { srv = r.totals; moves = r.moves || []; draw(); })).catch(() => {});
   }
-  async function closeShift(sh, f) {
+  // Each account: expected vs counted with a tick; totals in SH and USD are added up by the app.
+  function drawCompare(sh, x) {
+    const box = $('#cmp'); if (!box) return;
+    const keep = {}; $$('#cmp input').forEach(i => keep[i.name] = i.value);
+    const rows = [['SH', [['closeCash', t('Cash'), x.eCashSH], ['closeZaadSH', 'Zaad', x.eZaadSH], ['closeEdSH', 'Edahab', x.eEdSH]]],
+                  ['USD', [['closeCashUSD', t('Cash'), x.eCashUSD], ['closeZaadUSD', 'Zaad', x.eZaadUSD], ['closeEdUSD', 'Edahab', x.eEdUSD]]]];
+    box.innerHTML = `<table class="tbl cmp"><tr><th></th><th class="n">${esc(t('Expected'))}</th><th class="n">${esc(t('Counted'))}</th><th></th></tr>` +
+      rows.map(([cur, list]) => `<tr><td colspan="4" class="small bold" style="color:var(--navy);padding-top:12px">${cur === 'SH' ? esc(t('SHILLING (SH)')) : esc(t('DOLLARS (USD)'))}</td></tr>` +
+        list.map(([n, l, e]) => `<tr><td>${esc(l)}</td><td class="n">${cur === 'USD' ? usdF(e) : fmt(e)}</td><td class="n" style="width:112px"><input name="${n}" data-exp="${e}" data-cur="${cur}" inputmode="${cur === 'USD' ? 'decimal' : 'numeric'}" value="${esc(keep[n] || '')}" placeholder="0"></td><td class="n" style="width:30px" data-tick="${n}"></td></tr>`).join('') +
+        `<tr style="font-weight:750"><td>${esc(t('Total'))} ${cur}</td><td class="n">${cur === 'USD' ? usdF(x.totalUSD) : fmt(x.totalSH)}</td><td class="n" data-sum="${cur}"></td><td class="n" data-tick="sum${cur}"></td></tr>`).join('') +
+      `</table><div class="card tonal" style="margin:12px 0 0;padding:12px 14px"><div class="small muted bold">${esc(t('EVERYTHING IN SH (1 USD = {r})', { r: fmt(x.rate) }))}</div>
+      <div class="row" style="margin-top:6px"><span class="grow">${esc(t('Expected'))}</span><b>${fmt(x.totalSH + x.totalUSD * x.rate)}</b></div><div class="row"><span class="grow">${esc(t('Counted'))}</span><b id="allC">0</b></div>
+      <div class="row"><span class="grow">${esc(t('Difference'))}</span><span id="allD"></span></div></div>
+      ${x.waiting ? `<p class="small muted" style="margin:8px 0 0">${esc(t('Includes {n} items saved on this phone, not sent yet.', { n: x.waiting }))}</p>` : ''}
+      <p class="small muted" style="margin:8px 0 0">${esc(t('Totals are added up by the app. Only type what you counted in each account.'))}</p>`;
+    const tick = (ok, empty) => empty ? '' : `<span class="tick ${ok ? '' : 'bad'}">${I(ok ? 'check' : 'x')}</span>`;
+    const upd = () => {
+      const sum = { SH: 0, USD: 0 }, any = { SH: false, USD: false };
+      $$('#cmp input').forEach(i => {
+        const v = num(i.value), e = num(i.dataset.exp), c = i.dataset.cur; sum[c] += v; if (i.value !== '') any[c] = true;
+        $(`[data-tick="${i.name}"]`).innerHTML = tick(Math.abs(v - e) < (c === 'USD' ? 0.005 : 0.5), i.value === '');
+      });
+      sum.USD = Math.round(sum.USD * 100) / 100;
+      $('[data-sum="SH"]').textContent = fmt(sum.SH); $('[data-sum="USD"]').textContent = usdF(sum.USD);
+      $('[data-tick="sumSH"]').innerHTML = tick(Math.abs(sum.SH - x.totalSH) < 0.5, !any.SH && !any.USD);
+      $('[data-tick="sumUSD"]').innerHTML = tick(Math.abs(sum.USD - x.totalUSD) < 0.005, !any.SH && !any.USD);
+      const all = sum.SH + sum.USD * x.rate, diff = Math.round(all - (x.totalSH + x.totalUSD * x.rate));
+      $('#allC').textContent = fmt(all); $('#allD').innerHTML = diffTxt(diff);
+    };
+    $$('#cmp input').forEach(i => i.oninput = upd); upd();
+  }
+  // Sales made in this shift, newest first, each with Undo (needs the undoSales permission).
+  function drawMySales(sh) {
+    const box = $('#mysales'); if (!box) return;
+    const q = S.queue.filter(o => o.action === 'sale.create' && o.userId === S.user.id && o.data.business === sh.business)
+      .map(o => ({ id: o.data.id, ts: o.ts, local: 1, method: o.data.method, items: o.data.items, total: A.roundStep(o.data.items.reduce((a, it) => a + num((findProd(it.productId) || {}).price) * num(it.qty), 0) - num(o.data.discount)) }));
+    const hit = A.cacheGet('sales.list', { business: sh.business, from: String(sh.openTs).slice(0, 10), to: A.today() });
+    const srv = ((hit && hit.sales) || []).filter(s => s.shiftId === sh.id && s.userId === S.user.id);
+    const list = q.reverse().concat(srv.filter(s => !q.some(x => x.id === s.id)));
+    const gone = s => s.status === 'undone' || s.status === 'void';
+    box.innerHTML = list.length ? `<h3>${esc(t('Sales in my shift'))}</h3><div class="list">${list.slice(0, 40).map(s => `<div class="li" style="${gone(s) ? 'opacity:.55' : ''}"><div class="main">
+      <div class="name" style="${gone(s) ? 'text-decoration:line-through' : ''}">${s.local ? esc(t('now')) : String(s.ts).slice(11, 16)} · ${money(s.total)}</div>
+      <div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' ×' + fmt(i.qty)).join(', ')} · ${esc(A.methodName(s.method))}${s.local ? ' · ' + esc(t('Waiting to send')) : ''}${gone(s) ? ' · ' + esc(t('Undone')) : ''}</div></div>
+      ${!gone(s) && can('undoSales') ? `<button class="btn sm ghost" data-undo="${esc(s.id)}">${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div>`).join('')}</div>` : '';
+    $$('[data-undo]', box).forEach(b => b.onclick = () => undoSheet(list.find(s => s.id === b.dataset.undo), () => loadLive(sh)));
+    if (S.online) A.cachedCall('sales.list', { business: sh.business, from: String(sh.openTs).slice(0, 10), to: A.today() }, () => { if ($('#mysales') && !document.querySelector('.ov')) { const y = window.scrollY; drawMySales(sh); window.scrollTo(0, y); } }).catch(() => {});
+  }
+  function undoSheet(s, done) {
+    const reasons = ['Wrong item', 'Wrong price', 'Customer changed mind', 'Wrong payment'];
+    let reason = '';
+    const sh = sheet({ title: t('Undo sale {t}?', { t: s.local ? t('now') : String(s.ts).slice(11, 16) }), body: `<div class="totalbox" style="padding:12px"><div class="u">${esc(A.methodName(s.method))}</div><div class="t" style="font-size:28px">${money(s.total)}</div></div>
+      <div class="list"><div class="li lead"><span class="av green" style="width:34px;height:34px">${I('box', 'sm')}</span><div class="main"><div class="name">${esc(t('Stock goes back'))}</div><div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' +' + fmt(i.qty)).join(' · ')}</div></div></div>
+      <div class="li lead"><span class="av" style="width:34px;height:34px">${I('cash', 'sm')}</span><div class="main"><div class="name">${esc(s.method === 'credit' ? t('Customer debt goes down') : t('Expected money goes down'))}</div><div class="sub">${esc(s.method === 'credit' ? '' : t('Give the money back to the customer'))}</div></div></div></div>
+      <label class="f"><span>${esc(t('Reason (required)'))}</span><div class="chips" id="rs">${reasons.map(r => `<button class="chip" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
+      <p class="small muted">${esc(t('Only sales in your own open shift. The owner sees every undo.'))}</p>`,
+      actions: [{ label: t('Back'), cls: 'ghost' }, { label: t('Undo sale'), cls: 'red', icon: 'undo', onClick: async close => {
+        if (!reason) throw new Error(t('Choose a reason'));
+        const qi = S.queue.findIndex(o => o.action === 'sale.create' && o.data.id === s.id);
+        if (qi >= 0) {   // not sent yet: simply remove it from this phone
+          const op = S.queue.splice(qi, 1)[0]; A.LS.set('queue', S.queue);
+          op.data.items.forEach(it => { const p = findProd(it.productId); if (p) { if (op.data.business === 'shop') p.stock = num(p.stock) + num(it.qty); p.sold = Math.max(0, num(p.sold) - num(it.qty)); } });
+          if (op.data.method === 'credit') { const c = S.data.customers.find(x => x.id === op.data.customerId); if (c) c.balance = num(c.balance) - s.total; }
+          A.saveData(); A.updateTop();
+        } else {
+          needOnline();
+          const r = await api('sale.undo', { id: s.id, reason });
+          if (r.stock) r.stock.forEach(x => { const p = findProd(x.id); if (p) { p.stock = x.stock; p.sold = x.sold; } });
+          if (r.customer) A.upsert('customers', r.customer);
+          A.saveData();
+        }
+        close(); toast(t('Sale undone'), 'ok'); done && done();
+      } }] });
+    $$('#rs .chip', sh.el).forEach(c => c.onclick = () => { reason = c.dataset.r; $$('#rs .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); });
+  }
+  function cashOutSheet(done) {
+    const owners = A.LS.get('names', []).filter(u => u.business === 'both').map(u => u.name);
+    let who = owners[0] || '', reason = 'Owner took', cur = 'SH';
+    const reasons = ['Owner took', 'Bank / Zaad deposit', 'Pay a supplier', 'Other'];
+    const sh = sheet({ title: t('Take cash out'), body: `<label class="f"><span>${esc(t('Amount'))}</span><div class="row"><input class="in big grow" name="amt" inputmode="decimal" autofocus placeholder="0">
+        <div class="seg" id="ccur" style="flex:0 0 150px;flex-wrap:nowrap"><button data-v="SH" class="on">SH</button><button data-v="USD">USD</button></div></div></label>
+      <label class="f"><span>${esc(t('Who took it'))}</span><div class="chips" id="who">${owners.map((n, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-w="${esc(n)}">${esc(n)}</button>`).join('')}<button class="chip ${owners.length ? '' : 'on'}" data-w="">${esc(t('Other…'))}</button></div>
+        <input class="in ${owners.length ? 'hidden' : ''}" id="whoO" placeholder="${esc(t('Name'))}" style="margin-top:8px"></label>
+      <label class="f"><span>${esc(t('Why'))}</span><div class="chips" id="why">${reasons.map((r, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
+      ${input('note', t('Note'), '')}<p class="small muted">${esc(t('Expected cash goes down by this amount. The owner sees who took what and when.'))}</p>`,
+      actions: [{ label: t('Cancel'), cls: 'ghost' }, { label: t('Save'), cls: 'gold', onClick: close => {
+        const amt = num($('[name=amt]', sh.el).value); if (!(amt > 0)) throw new Error(t('Enter an amount'));
+        const name = who || $('#whoO', sh.el).value.trim(); if (!name) throw new Error(t('Who took the money?'));
+        enqueue('cash.out', { id: A.uid('CO'), business: S.biz, amount: amt, currency: cur, takenBy: name, reason, note: $('[name=note]', sh.el).value });
+        close(); toast(t('Saved'), 'ok'); done && done();
+      } }] });
+    seg($('#ccur', sh.el), v => { cur = v; });
+    $$('#who .chip', sh.el).forEach(c => c.onclick = () => { who = c.dataset.w; $$('#who .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); $('#whoO', sh.el).classList.toggle('hidden', !!who); if (!who) $('#whoO', sh.el).focus(); });
+    $$('#why .chip', sh.el).forEach(c => c.onclick = () => { reason = c.dataset.r; $$('#why .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); });
+  }
+  async function closeShift(sh) {
     needOnline();
     await A.syncNow();
     if (S.queue.some(o => o.userId === S.user.id)) throw new Error(t('Some sales are not sent yet. Connect to the internet and try again.'));
     if (!(await confirmBox(t('End the shift now?'), t('End shift'), 'red'))) return;
-    const r = await api('shift.close', { id: sh.id, closeCash: num(f.closeCash), closeZaadSH: num(f.closeZaadSH), closeZaadUSD: num(f.closeZaadUSD), closeEdSH: num(f.closeEdSH), closeEdUSD: num(f.closeEdUSD), note: f.note });
+    const v = n => num(($(`#cmp [name=${n}]`) || {}).value);
+    const r = await api('shift.close', { id: sh.id, closeCash: v('closeCash'), closeCashUSD: v('closeCashUSD'), closeZaadSH: v('closeZaadSH'), closeZaadUSD: v('closeZaadUSD'),
+      closeEdSH: v('closeEdSH'), closeEdUSD: v('closeEdUSD'), note: ($('#cnote') || {}).value || '' });
     A.upsert('shifts', r.shift);
     go('shift');
     shiftResult(r.shift);
   }
   function diffTxt(d) { d = Math.round(num(d)); return d === 0 ? `<span class="pill green">${I('check', 'sm')}${esc(t('Correct'))}</span>` : d > 0 ? `<span class="pill gold">+${fmt(d)} ${esc(t('extra'))}</span>` : `<span class="pill red">${fmt(d)} ${esc(t('short'))}</span>`; }
   function shiftResult(s) {
-    A.alertBox(t('Shift ended'), `<table class="tbl"><tr><th></th><th class="n">${esc(t('Expected'))}</th><th class="n">${esc(t('Counted'))}</th><th class="n">${esc(t('Difference'))}</th></tr>
-      <tr><td>${esc(t('Cash'))}</td><td class="n">${fmt(s.expectedCash)}</td><td class="n">${fmt(s.closeCash)}</td><td class="n">${diffTxt(s.diffCash)}</td></tr>
-      <tr><td>Zaad</td><td class="n">${fmt(s.expectedZaad)}</td><td class="n">${fmt(num(s.closeZaadSH) + num(s.closeZaadUSD) * num(s.rate))}</td><td class="n">${diffTxt(s.diffZaad)}</td></tr>
-      <tr><td>Edahab</td><td class="n">${fmt(s.expectedEd)}</td><td class="n">${fmt(num(s.closeEdSH) + num(s.closeEdUSD) * num(s.rate))}</td><td class="n">${diffTxt(s.diffEd)}</td></tr></table>
+    const tk = (a, b, usd) => `<span class="tick ${Math.abs(num(a) - num(b)) < (usd ? 0.005 : 0.5) ? '' : 'bad'}">${I(Math.abs(num(a) - num(b)) < (usd ? 0.005 : 0.5) ? 'check' : 'x')}</span>`;
+    if (s.eCashSH === undefined || s.eCashSH === '') {   // shifts closed before v1.2
+      return A.alertBox(t('Shift ended'), `<table class="tbl"><tr><th></th><th class="n">${esc(t('Expected'))}</th><th class="n">${esc(t('Counted'))}</th><th class="n">${esc(t('Difference'))}</th></tr>
+        <tr><td>${esc(t('Cash'))}</td><td class="n">${fmt(s.expectedCash)}</td><td class="n">${fmt(s.closeCash)}</td><td class="n">${diffTxt(s.diffCash)}</td></tr>
+        <tr><td>Zaad</td><td class="n">${fmt(s.expectedZaad)}</td><td class="n">${fmt(num(s.closeZaadSH) + num(s.closeZaadUSD) * num(s.rate))}</td><td class="n">${diffTxt(s.diffZaad)}</td></tr>
+        <tr><td>Edahab</td><td class="n">${fmt(s.expectedEd)}</td><td class="n">${fmt(num(s.closeEdSH) + num(s.closeEdUSD) * num(s.rate))}</td><td class="n">${diffTxt(s.diffEd)}</td></tr></table>`);
+    }
+    const row = (l, e, c, usd, b) => `<tr${b ? ' style="font-weight:750"' : ''}><td>${l}</td><td class="n">${usd ? usdF(e) : fmt(e)}</td><td class="n">${usd ? usdF(c) : fmt(c)}</td><td class="n">${tk(e, c, usd)}</td></tr>`;
+    A.alertBox(t('Shift ended'), `<table class="tbl cmp"><tr><th></th><th class="n">${esc(t('Expected'))}</th><th class="n">${esc(t('Counted'))}</th><th></th></tr>
+      <tr><td colspan="4" class="small bold" style="color:var(--navy)">SH</td></tr>${row(esc(t('Cash')), s.eCashSH, s.closeCash)}${row('Zaad', s.eZaadSH, s.closeZaadSH)}${row('Edahab', s.eEdSH, s.closeEdSH)}${row(esc(t('Total')) + ' SH', s.totalExpSH, s.totalCountSH, false, 1)}
+      <tr><td colspan="4" class="small bold" style="color:var(--navy)">USD</td></tr>${row(esc(t('Cash')), s.eCashUSD, s.closeCashUSD, 1)}${row('Zaad', s.eZaadUSD, s.closeZaadUSD, 1)}${row('Edahab', s.eEdUSD, s.closeEdUSD, 1)}${row(esc(t('Total')) + ' USD', s.totalExpUSD, s.totalCountUSD, 1, 1)}</table>
+      <div class="row" style="margin-top:12px"><b class="grow">${esc(t('Everything in SH'))}</b>${diffTxt(s.diffAll)}</div>
       <p class="small muted">${esc(t('USD is counted at {r} SH.', { r: fmt(s.rate) }))}</p>`);
   }
   async function loadShiftHistory() {
@@ -333,11 +468,10 @@
     A.cachedCall('shift.list', { business: S.biz, from: A.addDays(A.today(), -7), to: A.today() }, r => {
       if (!$('#hist')) return;
       box.innerHTML = `<h3>${esc(t('Recent shifts'))}</h3><div class="list">${r.shifts.map(s => `<div class="li tap" data-id="${esc(s.id)}"><div class="main"><div class="name">${esc(s.userName)} · ${A.when(s.openTs)}</div>
-        <div class="sub">${s.status === 'open' ? esc(t('Open')) : esc(t('Cash')) + ' ' + fmt(s.closeCash)}</div></div>${s.status === 'closed' ? diffTxt(s.diffCash) : '<span class="pill green">' + esc(t('Open')) + '</span>'}</div>`).join('') || `<div class="empty">${esc(t('No shifts'))}</div>`}</div>`;
+        <div class="sub">${s.status === 'open' ? esc(t('Open')) : esc(t('Cash')) + ' ' + fmt(s.closeCash) + (num(s.closeCashUSD) ? ' + ' + usdF(s.closeCashUSD) : '')}</div></div>${s.status === 'closed' ? diffTxt(s.diffAll !== '' && s.diffAll !== undefined ? s.diffAll : s.diffCash) : '<span class="pill green">' + esc(t('Open')) + '</span>'}</div>`).join('') || `<div class="empty">${esc(t('No shifts'))}</div>`}</div>`;
       $$('.li', box).forEach(li => li.onclick = () => { const s = r.shifts.find(x => x.id === li.dataset.id); if (s.status === 'closed') shiftResult(s); });
     }).catch(() => {});
   }
-
 
   /* ======================= CUSTOMERS ======================= */
   Screens.customers = function (main) {
@@ -372,15 +506,21 @@
     const biz = c.business === 'food' ? setting('foodName') : setting('shopName');
     const sh = sheet({ title: c.name, body: `<div class="totalbox"><div class="u">${esc(t('Owes'))}</div><div class="t">${money(c.balance)}</div><div class="u">${usd(c.balance)}</div></div>
       <div class="grid2"><button class="btn gold" id="pay">${I('cash')}${esc(t('Receive payment'))}</button><button class="btn" id="ed">${I('edit')}${esc(t('Edit'))}</button>
-      ${c.phone ? `<a class="btn" href="tel:${esc(c.phone)}">${I('phone')}${esc(t('Call'))}</a><button class="btn" id="wa">${I('chat')}WhatsApp</button>` : ''}</div>
+      ${c.phone ? `<a class="btn" href="tel:${esc(c.phone)}">${I('phone')}${esc(t('Call'))}</a><button class="btn" id="wa">${I('chat')}WhatsApp</button>` : ''}${can('deleteCustomers') ? `<button class="btn ghost red" id="del" style="color:var(--red)">${I('trash')}${esc(t('Delete'))}</button>` : ''}</div>
       <div class="spacer"></div><h3>${esc(t('History'))}</h3><div id="led">${skel(2)}</div>` });
     const el = sh.el;
     $('#pay', el).onclick = () => { sh.close(); paymentForm(c, redraw); };
     $('#ed', el).onclick = () => { sh.close(); customerForm(c, redraw); };
+    if ($('#del', el)) $('#del', el).onclick = () => withBusy($('#del', el), async () => {
+      needOnline();
+      if (!(await confirmBox(t('Delete {n}?', { n: c.name }), t('Delete'), 'red'))) return;
+      await api('cust.delete', { id: c.id });
+      S.data.customers = S.data.customers.filter(x => x.id !== c.id); A.saveData(); sh.close(); toast(t('Deleted'), 'ok'); if (redraw) redraw();
+    });
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(c.phone, t('Hello {n}, your balance at {b} is {x}. Thank you.', { n: c.name, b: biz, x: money(c.balance) }));
     A.cachedCall('cust.ledger', { customerId: c.id }, r => {
-      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t(l.type === 'sale' ? 'Credit sale' : l.type === 'payment' ? 'Payment' : 'Refund'))}</div>
-        <div class="sub">${A.when(l.ts)} · ${esc(l.userName)} ${l.method && l.type === 'payment' ? '· ' + esc(A.methodName(l.method)) : ''}</div></div><b class="${l.type === 'sale' ? 'red' : 'green'}">${l.type === 'sale' ? '+' : '−'}${fmt(l.amount)}</b></div>`).join('') || `<div class="empty">—</div>`}</div>`;
+      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t({ sale: 'Credit sale', payment: 'Payment', refund: 'Refund', void: 'Undone sale', reset: 'Balance reset', opening: 'Carried forward' }[l.type] || l.type))}</div>
+        <div class="sub">${A.when(l.ts)} · ${esc(l.userName)} ${l.method && l.type === 'payment' ? '· ' + esc(A.methodName(l.method)) : ''}</div></div>${(() => { const v = l.type === 'sale' ? num(l.amount) : (l.type === 'reset' || l.type === 'opening') ? num(l.amount) : -num(l.amount); return `<b class="${v > 0 ? 'red' : 'green'}">${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</b>`; })()}</div>`).join('') || `<div class="empty">—</div>`}</div>`;
     }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }
   function paymentForm(c, done) {
@@ -459,6 +599,7 @@
     if (r.expiring.length) alerts.push(['products/exp', 'calendar', t('{n} products expired or expiring', { n: r.expiring.length }), 'gold']);
     if (r.lowIngredients.length) alerts.push(['ingredients', 'food', t('Low ingredients: {x}', { x: r.lowIngredients.map(i => t(i.name)).join(', ') }), 'gold']);
     if (r.openOrders && can('suppliers')) alerts.push(['purchasing', 'truck', t('{n} purchase orders waiting for delivery', { n: r.openOrders }), '']);
+    if ((r.undone || []).length) alerts.push([can('viewInsights') ? 'insights' : 'reports', 'undo', t('{n} sales undone today', { n: r.undone.length }), 'red']);
     const hk = $('#herokpi');
     if (hk) hk.innerHTML = `<div class="kpi"><div><div class="l">${esc(t('Sales today'))}</div><div class="v">${fmt(T.netSales)} <span style="font-size:15px;font-weight:600">SH</span></div>
       <div class="l" style="font-weight:500">${T.count} ${esc(t('sales'))} · ${usd(T.netSales)}</div></div>
@@ -470,6 +611,10 @@
       <div class="stats">${stat('cash', t('Cash'), fmt(T.cash))}${stat('phone', 'Zaad', fmt(T.zaad))}${stat('phone', 'Edahab', fmt(T.edahab))}${stat('users', t('Credit'), fmt(T.credit))}
         ${stat('wallet', t('Expenses'), fmt(T.expenses + T.stockPurchases))}${stat('undo', t('Refunds'), fmt(T.refunds))}${stat('receipt', t('Customer debts'), fmt(r.totalDebt))}${stat('okcircle', t('Debt payments'), fmt(T.custPay))}</div>
       ${alerts.length ? `<h3>${esc(t('Needs attention'))}</h3><div class="list">${alerts.map(a => `<div class="li tap lead" data-go="${a[0]}"><span class="av ${a[3]}">${I(a[1])}</span><div class="main name" style="white-space:normal">${esc(a[2])}</div>${I('right', 'sm chev')}</div>`).join('')}</div>` : ''}
+      ${(r.shifts || []).length ? `<h3>${esc(t('Shifts today'))}</h3><div class="list">${r.shifts.slice().reverse().map(x => `<div class="li lead"><span class="av ${x.status === 'open' ? 'green' : 'gray'}">${I(x.status === 'open' ? 'clock' : 'lock')}</span><div class="main">
+        <div class="name">${esc(x.userName)} · ${esc(A.bizName(x.business))}</div><div class="sub">${esc(t('Started'))} <b>${String(x.openTs).slice(11, 16)}</b>${x.scheduled ? ' · ' + esc(t('scheduled {t}', { t: x.scheduled })) : ''}${x.closeTs ? ' · ' + esc(t('ended')) + ' ' + String(x.closeTs).slice(11, 16) + (x.worked !== '' ? ' · ' + Math.floor(x.worked / 60) + 'h ' + (x.worked % 60) + 'm' : '') : ''}</div>
+        <div style="margin-top:4px">${x.lateBy ? `<span class="pill gold">${esc(t('{n} min late', { n: x.lateBy }))}</span>` : `<span class="pill green">${esc(t('On time'))}</span>`} ${x.status === 'open' ? `<span class="pill green">${esc(t('Open'))}</span>` : diffTxt(x.diffAll !== '' && x.diffAll !== undefined ? x.diffAll : x.diffCash)}</div></div></div>`).join('')}</div>` : ''}
+      ${(r.cashMoves || []).length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${r.cashMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div><div class="sub">${A.when(m.ts)} · ${esc(t(m.reason || ''))} · ${esc(t('recorded by {n}', { n: m.userName }))}</div></div></div>`).join('')}</div>` : ''}
       <h3>${esc(t('Money in shifts'))}</h3><div class="list">${r.balances.map(b => `
         ${b.open.map(o => `<div class="li lead"><span class="av green">${I('clock')}</span><div class="main"><div class="name">${esc(A.bizName(b.business))} · ${esc(o.userName)}</div>
           <div class="sub" style="white-space:normal">${esc(t('Expected now'))}: ${esc(t('Cash'))} ${fmt(o.expectedCash)} · Zaad ${fmt(o.expectedZaad)} · Edahab ${fmt(o.expectedEd)}</div></div><span class="pill green">${esc(t('Open'))}</span></div>`).join('')}
@@ -477,10 +622,11 @@
           <div class="sub" style="white-space:normal">${esc(b.last.userName)} · ${esc(t('Cash'))} ${fmt(b.last.cash)} · Zaad ${fmt(b.last.zaad)} · Edahab ${fmt(b.last.edahab)}</div></div>${diffTxt(b.last.diffCash)}</div>` : ''}`).join('') || `<div class="empty">${I('clock')}${esc(t('No shifts'))}</div>`}</div>
       <div class="grid2"><div><h3>${esc(t('Best sellers'))}</h3><div class="list">${r.topItems.slice(0, 5).map((i, n) => `<div class="li"><span class="av gold" style="width:28px;height:28px;border-radius:9px;font-size:13px">${n + 1}</span><div class="main name">${esc(i.name)}</div><span class="muted small">×${fmt(i.qty)}</span></div>`).join('') || `<div class="empty small">—</div>`}</div></div>
         <div><h3>${esc(t('Top debtors'))}</h3><div class="list">${r.debts.slice(0, 5).map(c => `<div class="li"><div class="main name">${esc(c.name)}</div><b class="red small">${fmt(c.balance)}</b></div>`).join('') || `<div class="empty small">—</div>`}</div></div></div>
-      <div class="col" style="margin-top:4px"><button class="btn green block lg" id="wa">${I('chat')}${esc(t('Send daily summary on WhatsApp'))}</button><button class="btn block" id="rep">${I('chart')}${esc(t('Full reports'))}</button></div>`;
+      <div class="col" style="margin-top:4px"><button class="btn green block lg" id="wa">${I('chat')}${esc(t('Send daily summary on WhatsApp'))}</button>${can('viewInsights') ? `<button class="btn block" id="ins">${I('chart')}${esc(t('Insights'))}</button>` : ''}<button class="btn block" id="rep">${I('file')}${esc(t('Full reports'))}</button></div>`;
     $$('[data-go]', box).forEach(x => x.onclick = () => go(x.dataset.go));
     $('#wa', box).onclick = () => A.openWhatsApp(setting('ownerWhatsApp'), summaryText(r));
     $('#rep', box).onclick = () => go('reports');
+    if ($('#ins', box)) $('#ins', box).onclick = () => go('insights');
   }
 
   /* ======================= REPORTS ======================= */
@@ -489,7 +635,7 @@
     const bizs = A.myBiz();
     const st = S.repState || (S.repState = { biz: bizs.length > 1 ? 'all' : bizs[0], from: A.today(), to: A.today(), preset: 'today' });
     const presets = { today: [A.today(), A.today()], yesterday: [A.addDays(A.today(), -1), A.addDays(A.today(), -1)], week: [A.addDays(A.today(), -6), A.today()], month: [A.today().slice(0, 8) + '01', A.today()] };
-    main.innerHTML = head(t('Choose business and dates'), `<button class="iconbtn tonal round noprint" onclick="window.print()" aria-label="print">${I('printer', 'sm')}</button>`) + `<div class="card noprint">
+    main.innerHTML = head(t('Choose business and dates'), `${can('viewInsights') ? `<button class="btn sm noprint" id="goIns">${I('chart', 'sm')}${esc(t('Insights'))}</button>` : ''}<button class="iconbtn tonal round noprint" onclick="window.print()" aria-label="print">${I('printer', 'sm')}</button>`) + `<div class="card noprint">
       ${bizs.length > 1 ? `<div class="chips" id="rb" style="margin-bottom:8px">${['all', 'shop', 'food'].map(b => `<button class="chip ${st.biz === b ? 'on' : ''}" data-v="${b}">${esc(b === 'all' ? t('Shop + Fast Food') : A.bizName(b))}</button>`).join('')}</div>` : ''}
       <div class="chips" id="pr">${[['today', t('Today')], ['yesterday', t('Yesterday')], ['week', t('7 days')], ['month', t('This month')]].map(p => `<button class="chip ${st.preset === p[0] ? 'on' : ''}" data-v="${p[0]}">${esc(p[1])}</button>`).join('')}</div>
       <div class="grid2" style="margin-top:8px"><label class="f"><span>${esc(t('From'))}</span><input class="in" type="date" id="rf" value="${st.from}"></label><label class="f"><span>${esc(t('To'))}</span><input class="in" type="date" id="rt" value="${st.to}"></label></div></div>
@@ -497,14 +643,21 @@
     $$('#rb .chip').forEach(c => c.onclick = () => { st.biz = c.dataset.v; $$('#rb .chip').forEach(x => x.classList.toggle('on', x === c)); load(); });
     $$('#pr .chip').forEach(c => c.onclick = () => { st.preset = c.dataset.v; [st.from, st.to] = presets[st.preset]; $('#rf').value = st.from; $('#rt').value = st.to; $$('#pr .chip').forEach(x => x.classList.toggle('on', x === c)); load(); });
     $('#rf').onchange = $('#rt').onchange = () => { st.from = $('#rf').value; st.to = $('#rt').value; st.preset = ''; $$('#pr .chip').forEach(x => x.classList.remove('on')); load(); };
+    if ($('#goIns')) $('#goIns').onclick = () => go('insights');
     const load = () => {
       const q = { business: st.biz, from: st.from, to: st.to };
+      const until = setting('archivedUntil');
+      const note = until && st.from < until ? archiveNote(until) : '';
       if (!A.cacheGet('report', q) && $('#rep')) $('#rep').innerHTML = skel(3);
-      return A.cachedCall('report', q, r => { if ($('#rep')) drawReport($('#rep'), r); }).catch(e => { if ($('#rep')) $('#rep').innerHTML = notYet(e); });
+      return A.cachedCall('report', q, r => { if ($('#rep')) { drawReport($('#rep'), r); if (note) $('#rep').insertAdjacentHTML('afterbegin', note); } }).catch(e => { if ($('#rep')) $('#rep').innerHTML = notYet(e); });
     };
     if (S.queue.length) A.syncNow().then(load);
     load();
   };
+  function archiveNote(until) {
+    let links = []; try { links = JSON.parse(setting('archiveLinks') || '[]'); } catch (e) {}
+    return `<div class="card alert amber small">${I('box', 'sm')} ${esc(t('Data before {d} is in the Archive.', { d: until }))} ${links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener"><b>${esc(l.name)}</b></a>`).join(' · ')}</div>`;
+  }
   function drawReport(box, r) {
     const bz = ['shop', 'food'].filter(b => r.business.indexOf(b) >= 0), P = r.profitVisible;
     const col = (lbl, f) => `<tr><td>${esc(lbl)}</td>${bz.map(b => `<td class="n">${f(r.byBiz[b])}</td>`).join('')}${bz.length > 1 ? `<td class="n"><b>${f(r.totals)}</b></td>` : ''}</tr>`;
@@ -548,12 +701,14 @@
       [t('Business'), [
         ['products', food ? 'food' : 'box', food ? t('Menu items') : t('Products'), t('Prices, barcodes, stock, import'), can('viewStock') || can('manageProducts') || can('changePrices'), 'gold'],
         ['purchasing', 'truck', t('Purchasing'), t('Purchase orders and suppliers'), can('suppliers'), 'gold'],
-        ['reports', 'chart', t('Reports'), t('Sales, profit, debts, balances'), can('viewReports'), 'gold'],
+        ['reports', 'file', t('Reports'), t('Sales, profit, debts, balances'), can('viewReports'), 'gold'],
+        ['insights', 'chart', t('Insights'), t('This month vs last, busy hours, attendance'), can('viewInsights'), 'gold'],
         ['users', 'shield', t('Users'), t('Accounts, PINs and permissions'), can('manageUsers'), 'gold'],
         ['settings', 'sliders', t('Settings'), t('Rates, accounts, hours, install'), can('settings'), 'gold'],
         ['audit', 'file', t('Audit log'), t('Who did what and when'), can('audit'), 'gold']]],
       [t('App'), [
         ['sync', 'sync', t('Sync status'), t('Sales waiting to be sent'), true, 'gray', S.failed.length],
+        ['emails', 'bell', t('My email reports'), t('Daily, weekly or monthly'), can('emailReports'), 'gray'],
         ['install', 'install', t('Install the app'), t('Add Saado POS to your home screen'), !A.isStandalone(), 'gray'],
         ['guide', 'book', t('Guide'), t('How to use Saado POS'), true, 'gray'],
         ['pin', 'key', t('My PIN'), t('Change your PIN'), true, 'gray'],
@@ -639,7 +794,13 @@
       ${!isNew ? `<label class="chk"><input type="checkbox" name="active" ${String(p.active) !== '0' ? 'checked' : ''}><span class="main">${esc(t('Active (can be sold)'))}</span></label>` : ''}` : ''}
       ${!isNew ? `<p class="small muted">${esc(t('Sold so far'))}: ${fmt(p.sold)}</p>` : ''}</form>`,
       onOpen: el => { const sb = $('#sb', el); if (sb) sb.onclick = async () => { const c = await A.scanOnce(); if (c) $('[name=barcode]', el).value = c; }; },
-      actions: [{ label: t('Cancel') }].concat(mp || cp ? [{ label: t('Save'), cls: 'gold', onClick: async (close, el) => {
+      actions: [!isNew && can('deleteProducts') ? { label: t('Delete'), cls: 'red', icon: 'trash', onClick: async close => {
+        needOnline();
+        if (!(await confirmBox(t('Delete {n}? Old sales and reports keep its name.', { n: p.name }), t('Delete'), 'red'))) return;
+        const r = await api('prod.delete', { id: p.id });
+        S.data.products = S.data.products.filter(x => x.id !== p.id); A.saveData(); close();
+        toast(r.removed === 'deleted' ? t('Deleted') : t('Removed from lists (kept in old sales)'), 'ok'); if (done) done();
+      } } : { label: t('Cancel') }].concat(mp || cp ? [{ label: t('Save'), cls: 'gold', onClick: async (close, el) => {
         needOnline();
         const f = formData($('#f', el));
         const d = { id: isNew ? '' : p.id, business: p.business || S.biz, name: f.name, barcode: f.barcode, price: num(f.price), category: f.category, lowStock: f.lowStock, expiry: f.expiry || '', fav: f.fav, active: isNew ? 1 : f.active };
@@ -783,18 +944,24 @@
     const bal = num(s.balance);
     const sh = sheet({ title: s.name, body: `<div class="totalbox"><div class="u">${esc(bal < 0 ? t('Deposit paid') : t('We owe'))}</div><div class="t">${money(Math.abs(bal))}</div></div>
       <div class="grid2"><button class="btn gold" id="no">${I('plus')}${esc(t('New order'))}</button><button class="btn" id="pay">${I('cash')}${esc(t('Pay supplier'))}</button>
-      ${s.phone ? `<a class="btn" href="tel:${esc(s.phone)}">${I('phone')}${esc(t('Call'))}</a><button class="btn" id="wa">${I('chat')}WhatsApp</button>` : ''}<button class="btn ghost" id="ed">${I('edit')}${esc(t('Edit'))}</button></div>
+      ${s.phone ? `<a class="btn" href="tel:${esc(s.phone)}">${I('phone')}${esc(t('Call'))}</a><button class="btn" id="wa">${I('chat')}WhatsApp</button>` : ''}<button class="btn ghost" id="ed">${I('edit')}${esc(t('Edit'))}</button>${can('deleteSuppliers') ? `<button class="btn ghost" id="sdel" style="color:var(--red)">${I('trash')}${esc(t('Delete'))}</button>` : ''}</div>
       <h3>${esc(t('Purchase orders'))}</h3><div class="list">${orders.map(o => `<div class="li tap" data-id="${esc(o.id)}"><div class="main"><div class="name">${esc(o.poNo)}</div><div class="sub">${A.when(o.createdTs)} · ${esc(t(PST[o.status][0]))}</div></div><b>${fmt(o.total)}</b></div>`).join('') || `<div class="empty small">—</div>`}</div>
       <h3>${esc(t('Payments and deliveries'))}</h3><div id="led">${skel(2)}</div>` });
     const el = sh.el;
     $('#no', el).onclick = () => { sh.close(); poForm(null, { supplierId: s.id }, done); };
     $('#pay', el).onclick = () => { sh.close(); supPayForm(s, done); };
     $('#ed', el).onclick = () => { sh.close(); supplierForm(s, done); };
+    if ($('#sdel', el)) $('#sdel', el).onclick = () => withBusy($('#sdel', el), async () => {
+      needOnline();
+      if (!(await confirmBox(t('Delete {n}?', { n: s.name }), t('Delete'), 'red'))) return;
+      await api('sup.delete', { id: s.id });
+      S.data.suppliers = S.data.suppliers.filter(x => x.id !== s.id); A.saveData(); sh.close(); toast(t('Deleted'), 'ok'); done && done();
+    });
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(s.phone, t('Hello {n},', { n: s.name }));
     $$('.li[data-id]', el).forEach(r => r.onclick = () => { sh.close(); poSheet(orders.find(o => o.id === r.dataset.id), done); });
     A.cachedCall('sup.ledger', { supplierId: s.id }, r => {
-      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => { const isPay = l.type === 'payment'; return `<div class="li"><span class="av ${isPay ? 'green' : 'gold'}" style="width:34px;height:34px">${I(isPay ? 'cash' : 'inbox', 'sm')}</span><div class="main"><div class="name">${esc(isPay ? t('Payment') : t('Goods received'))}${l.note ? ' · ' + esc(l.note) : ''}</div>
-        <div class="sub">${A.when(l.ts)} · ${esc(l.userName)}${isPay ? ' · ' + esc(A.methodName(l.method)) : ''}</div></div><b class="${isPay ? 'green' : ''}">${isPay ? '−' : '+'}${fmt(l.type === 'purchase' ? num(l.amount) - num(l.paid) : l.amount)}</b></div>`; }).join('') || '<div class="empty small">—</div>'}</div>`;
+      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => { const isPay = l.type === 'payment' || ((l.type === 'opening' || l.type === 'adjust') && num(l.amount) < 0); return `<div class="li"><span class="av ${isPay ? 'green' : 'gold'}" style="width:34px;height:34px">${I(isPay ? 'cash' : 'inbox', 'sm')}</span><div class="main"><div class="name">${esc(l.type === 'opening' ? t('Carried forward') : l.type === 'adjust' ? t('Balance reset') : isPay ? t('Payment') : t('Goods received'))}${l.note ? ' · ' + esc(l.note) : ''}</div>
+        <div class="sub">${A.when(l.ts)} · ${esc(l.userName)}${isPay ? ' · ' + esc(A.methodName(l.method)) : ''}</div></div><b class="${isPay ? 'green' : ''}">${isPay ? '−' : '+'}${fmt(Math.abs(l.type === 'purchase' ? num(l.amount) - num(l.paid) : num(l.amount)))}</b></div>`; }).join('') || '<div class="empty small">—</div>'}</div>`;
     }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }
   function supPayForm(s, done) {
@@ -1032,7 +1199,7 @@
     const sh = sheet({ title: t('Which sale?'), body: `<input class="in" id="q" placeholder="${esc(t('Search item or customer'))}"><div class="spacer"></div><div id="sl"></div>` });
     const draw = () => {
       const v = $('#q', sh.el).value.toLowerCase();
-      const l = r.sales.filter(s => s.status !== 'refunded' && (!v || JSON.stringify(s).toLowerCase().includes(v))).slice(0, 60);
+      const l = r.sales.filter(s => s.status !== 'refunded' && s.status !== 'undone' && s.status !== 'void' && (!v || JSON.stringify(s).toLowerCase().includes(v))).slice(0, 60);
       $('#sl', sh.el).innerHTML = `<div class="list">${l.map(s => `<div class="li tap" data-id="${esc(s.id)}"><div class="main"><div class="name">${money(s.total)} · ${esc(A.methodName(s.method))}${s.customerName ? ' · ' + esc(s.customerName) : ''}</div>
         <div class="sub">${A.when(s.ts)} · ${esc(s.userName)} · ${s.items.map(i => esc(i.name) + ' ×' + fmt(i.qty)).join(', ')}</div></div></div>`).join('') || `<div class="empty">${esc(t('No sales found'))}</div>`}</div>`;
       $$('#sl .li', sh.el).forEach(li => li.onclick = () => { sh.close(); refundItems(r.sales.find(s => s.id === li.dataset.id), done); });
@@ -1063,7 +1230,10 @@
     viewReports: 'See dashboard and reports', viewProfit: 'See cost and profit', viewStock: 'See stock quantities', changePrices: 'Change prices',
     manageProducts: 'Add and edit products and ingredients', discount: 'Give discounts', customers: 'Credit customers and debt payments', suppliers: 'Suppliers and purchases',
     expenses: 'Record expenses', ingredients: 'Enter ingredient usage', stockCount: 'Do stock counts', approveRefunds: 'Approve refunds',
-    manageUsers: 'Manage users and PINs', settings: 'Change settings', export: 'Export data (CSV)', audit: 'See the audit log'
+    manageUsers: 'Manage users and PINs', settings: 'Change settings', export: 'Export data (CSV)', audit: 'See the audit log',
+    undoSales: 'Undo own sales in their shift', cashOut: 'Record cash taken out of the drawer', voidSales: 'Void any sale (any time)',
+    deleteProducts: 'Delete products', deleteCustomers: 'Delete customers (no debt only)', deleteSuppliers: 'Delete suppliers (nothing owed only)',
+    viewInsights: 'See the Insights page', emailReports: 'Get email reports (and choose how often)'
   };
   Screens.users = function (main) {
     if (!can('manageUsers')) return noPerm(main);
@@ -1082,7 +1252,7 @@
       <p class="small muted">${esc(t('They can change it in More → My PIN.'))}</p>`);
   }
   function userForm(u, perms, done) {
-    u = u || { role: 'employee', business: S.biz, lang: 'so', afterHours: false, active: true, perms: ['viewStock', 'customers', 'expenses', 'ingredients'] };
+    u = u || { role: 'employee', business: S.biz, lang: 'so', afterHours: false, active: true, perms: ['viewStock', 'customers', 'expenses', 'ingredients', 'undoSales', 'cashOut'] };
     const isNew = !u.id;
     const sh = sheet({ title: isNew ? t('New user') : u.name, body: `<form id="f">${input('name', t('Name'), u.name, 'autofocus')}
       <label class="f"><span>${esc(t('Role'))}</span><div class="seg" data-name="role"><button data-v="employee" class="${u.role !== 'owner' ? 'on' : ''}">${esc(t('Employee'))}</button><button data-v="owner" class="${u.role === 'owner' ? 'on' : ''}">${esc(t('Owner'))}</button></div></label>
@@ -1121,6 +1291,14 @@
     main.innerHTML = `<div class="card navy row" style="align-items:center"><span class="av" style="background:rgba(255,255,255,.15);color:#fff">${I('install')}</span>
         <div class="grow"><b>${esc(t('Install the app'))}</b><div class="small muted">${esc(A.isStandalone() ? t('Installed on this phone') : t('Add Saado POS to your home screen'))}</div></div>
         <button class="btn gold sm" id="inst">${I('download')}${esc(t('Install'))}</button></div><form id="f">
+      <div class="card"><h3 style="margin-top:0">${esc(t('Businesses'))}</h3>
+        <div class="chk"><span class="av">${I('store')}</span><span class="main"><b>${esc(s.shopName || t('Shop'))}</b><div class="small muted">${esc(t('Always open'))}</div></span></div>
+        <label class="chk"><span class="av ${s.food_enabled === '0' ? 'gray' : ''}">${I('food')}</span><span class="main"><b>${esc(s.foodName || t('Fast Food'))}</b><div class="small ${s.food_enabled === '0' ? 'red bold' : 'muted'}">${esc(s.food_enabled === '0' ? t('Closed') : t('Open'))}</div></span><input type="checkbox" name="food_enabled" ${s.food_enabled === '0' ? '' : 'checked'}></label>
+        <p class="small muted" style="margin:6px 2px 0">${esc(t('Switch off while Fast Food is closed: its menu, ingredients, reports and staff are hidden. Nothing is deleted; switch on again to bring it all back.'))}</p></div>
+      <div class="card"><h3 style="margin-top:0">${esc(t('Alerts and shifts'))}</h3>
+        <label class="chk"><input type="checkbox" name="lowStockEmail" ${on('lowStockEmail')}><span class="main">${esc(t('Email at once when an item reaches its warning level'))}<div class="small muted">${esc(t('One email per item until it is restocked'))}</div></span></label>
+        <div class="grid2" style="margin-top:8px"><label class="f"><span>${esc(t('Weekly email on'))}</span><select class="in" name="weeklyDay">${['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<option value="${d}" ${(s.weeklyDay || 'Thu') === d ? 'selected' : ''}>${esc(t(d))}</option>`).join('')}</select></label>
+        ${moneyInput('lateMin', t('Late after (minutes)'), s.lateMin || '10')}</div></div>
       <div class="card"><h3>${esc(t('Money'))}</h3><div class="grid2">${moneyInput('usdRate', t('1 USD = ? SH'), s.usdRate)}${moneyInput('roundStep', t('Round totals to nearest (SH)'), s.roundStep)}</div></div>
       <div class="card"><h3>${esc(t('Zaad and Edahab accounts'))}</h3><div class="grid2">${input('shop_zaad', t('Shop Zaad'), s.shop_zaad, 'inputmode="numeric"')}${input('shop_edahab', t('Shop Edahab'), s.shop_edahab, 'inputmode="numeric"')}
         ${input('food_zaad', t('Fast Food Zaad'), s.food_zaad, 'inputmode="numeric"')}${input('food_edahab', t('Fast Food Edahab'), s.food_edahab, 'inputmode="numeric"')}</div></div>
@@ -1137,7 +1315,8 @@
       <div class="card"><h3>${esc(t('Names and phones'))}</h3>${input('shopName', t('Shop name'), s.shopName)}${input('foodName', t('Fast Food name'), s.foodName)}
         ${input('shopPhone', t('Phone shown on supplier orders'), s.shopPhone, 'inputmode="tel"')}${input('ownerWhatsApp', t('WhatsApp number for daily summary (e.g. 252634000000)'), s.ownerWhatsApp, 'inputmode="tel"')}</div>
       <button class="btn gold block lg">${esc(t('Save settings'))}</button></form>
-      ${isOwner() ? `<div class="card" style="margin-top:12px"><h3>${esc(t('Backup'))}</h3><p class="small muted">${esc(t('A copy of the Sheet is saved to Google Drive every night (folder "Saado POS Backups"). You can also make one now.'))}</p><button class="btn block" id="bk">${esc(t('Back up now'))}</button></div>` : ''}`;
+      <div class="card" id="emc" style="margin-top:12px"></div>
+      ${isOwner() ? `<div class="card" style="margin-top:12px"><h3>${esc(t('Backup'))}</h3><p class="small muted">${esc(t('A copy of the Sheet is saved to Google Drive every night (folder "Saado POS Backups"). You can also make one now.'))}</p><button class="btn block" id="bk">${esc(t('Back up now'))}</button></div><div class="card" id="arc"></div><div class="card danger" id="dz"></div>` : ''}`;
     const drawTypes = () => { $('#ot').innerHTML = types.map((x, i) => `<button type="button" class="chip on" data-i="${i}">${esc(t(x))} ${I('x', 'sm')}</button>`).join('') || `<span class="muted">—</span>`; $$('#ot .chip').forEach(c => c.onclick = () => { if (types.length > 1) { types.splice(c.dataset.i, 1); drawTypes(); } else toast(t('Keep at least one order type'), 'warn'); }); };
     $('#ota').onclick = () => { const v = $('#otn').value.trim().replace(/,/g, ' '); if (v && types.indexOf(v) < 0) { types.push(v); $('#otn').value = ''; drawTypes(); } };
     drawTypes();
@@ -1147,13 +1326,198 @@
         needOnline(); const f = formData(e.target), values = {};
         Object.keys(f).forEach(k => { values[k] = typeof f[k] === 'boolean' ? (f[k] ? '1' : '0') : f[k]; });
         values.food_orderTypes = types.join(',');
+        if (values.food_enabled === '0' && S.data.settings.food_enabled !== '0' && !(await confirmBox(t('Close Fast Food? Its menu, reports and staff are hidden until you switch it on again. Nothing is deleted.'), t('Close Fast Food'), 'red'))) return;
         const r = await api('settings.save', { values });
         S.data.settings = r.settings; A.saveData(); toast(t('Settings saved'), 'ok');
+        if (A.myBiz().indexOf(S.biz) < 0) { S.biz = A.myBiz()[0]; A.LS.set('biz_' + S.user.id, S.biz); }
+        A.drawShell(); A.render();
       });
     };
     $('#inst').onclick = () => A.installApp();
+    emailCard($('#emc'));
+    if ($('#arc')) dataCards($('#arc'), $('#dz'));
     if ($('#bk')) $('#bk').onclick = e => withBusy(e.target, async () => { needOnline(); const r = await api('backup.now', {}); toast(t('Backup saved: {n}', { n: r.name }), 'ok', 5000); });
   };
+
+  /* ======================= INSIGHTS (this month vs last month, days, hours, attendance) ======================= */
+  Screens.insights = function (main) {
+    if (!can('viewInsights')) return noPerm(main);
+    const bizs = A.myBiz(), mNow = A.today().slice(0, 7);
+    const st = S.insState || (S.insState = { month: mNow, biz: bizs.length > 1 ? 'all' : bizs[0] });
+    const months = []; for (let i = 0; i < 12; i++) { const d = new Date(Date.UTC(+mNow.slice(0, 4), +mNow.slice(5, 7) - 1 - i, 1)); months.push(d.toISOString().slice(0, 7)); }
+    const mName = m => { const so = S.lang === 'so'; const n = (so ? ['Janaayo', 'Febraayo', 'Maarso', 'Abriil', 'May', 'Juun', 'Luulyo', 'Agoosto', 'Sebtembar', 'Oktoobar', 'Nofembar', 'Desembar'] : ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'])[+m.slice(5, 7) - 1]; return n + ' ' + m.slice(0, 4); };
+    main.innerHTML = `<div class="row" style="margin:4px 0 10px"><select class="in grow" id="im">${months.map(m => `<option value="${m}" ${m === st.month ? 'selected' : ''}>${esc(mName(m))}</option>`).join('')}</select></div>
+      ${bizs.length > 1 ? `<div class="chips scroll" id="ib" style="margin-bottom:12px">${['all', 'shop', 'food'].map(b => `<button class="chip ${st.biz === b ? 'on' : ''}" data-v="${b}">${esc(b === 'all' ? t('Shop + Fast Food') : A.bizName(b))}</button>`).join('')}</div>` : ''}
+      <div id="ins">${skel(4)}</div>`;
+    $('#im').onchange = () => { st.month = $('#im').value; load(); };
+    $$('#ib .chip').forEach(c => c.onclick = () => { st.biz = c.dataset.v; $$('#ib .chip').forEach(x => x.classList.toggle('on', x === c)); load(); });
+    const load = () => A.cachedCall('insights', { month: st.month, business: st.biz }, r => { if ($('#ins')) drawInsights($('#ins'), r, mName); })
+      .catch(e => { if ($('#ins')) $('#ins').innerHTML = notYet(e); });
+    load();
+  };
+  function drawInsights(box, r, mName) {
+    const tr = (cur, prev, goodUp) => {
+      if (!prev) return `<span class="trend" style="background:var(--surface-3);color:var(--muted)">${esc(t('no data last month'))}</span>`;
+      const pct = Math.round((cur - prev) * 100 / Math.abs(prev)), up = pct >= 0, good = goodUp ? up : !up;
+      return `<span class="trend ${good ? 'up' : 'dn'}">${up ? '▲' : '▼'} ${Math.abs(pct)}% ${esc(t('vs {m}', { m: mName(r.prev).split(' ')[0] }))}</span>`;
+    };
+    const max = Math.max(1, ...r.dailyCur, ...r.dailyPrev);
+    const dowOrder = [6, 0, 1, 2, 3, 4, 5], dn = S.lang === 'so' ? ['Axad', 'Isn', 'Tal', 'Arb', 'Kha', 'Jim', 'Sab'] : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dmax = Math.max(1, ...r.dow), hmax = Math.max(1, ...r.heat.flat());
+    const hours = []; for (let h = 8; h < 24; h++) hours.push(h);
+    let best = { v: 0 }; r.heat.forEach((row, d) => row.forEach((v, h) => { if (v > best.v) best = { v, d, h }; }));
+    const undoneTotal = r.undone.reduce((a, x) => a + x.count, 0);
+    box.innerHTML = `
+      <div class="stats"><div class="stat"><div class="lbl">${I('chart')}${esc(t('Sales'))}</div><div class="val">${fmt(r.cur.sales)}</div>${tr(r.cur.sales, r.last.sales, true)}</div>
+        ${r.profitVisible ? `<div class="stat"><div class="lbl">${I('cash')}${esc(t('Profit'))}</div><div class="val" style="color:${num(r.cur.profit) < 0 ? 'var(--red)' : 'var(--green)'}">${fmt(r.cur.profit)}</div>${tr(r.cur.profit, r.last.profit, true)}</div>` : ''}
+        <div class="stat"><div class="lbl">${I('wallet')}${esc(t('Expenses'))}</div><div class="val">${fmt(r.cur.expenses)}</div>${tr(r.cur.expenses, r.last.expenses, false)}</div>
+        <div class="stat"><div class="lbl">${I('undo')}${esc(t('Undone sales'))}</div><div class="val">${undoneTotal}</div>${r.undone.length ? `<span class="trend dn">${r.undone.map(x => esc(x.name) + ' ' + x.count).join(' · ')}</span>` : ''}</div></div>
+      ${r.cur.fromArchive ? `<div class="card alert amber small">${esc(t('This month is in the Archive — only the totals are shown.'))}</div>` : ''}
+      <div class="card"><h3 style="margin-top:0">${esc(t('Sales per day'))} <span class="small muted" style="text-transform:none;letter-spacing:0">${esc(t('gold = {m}, gray = {p}', { m: mName(r.month).split(' ')[0], p: mName(r.prev).split(' ')[0] }))}</span></h3>
+        <div class="bars">${r.dailyCur.map((v, i) => `<i style="height:${Math.round(v * 100 / max)}%" title="${i + 1}: ${fmt(v)}"></i><i class="prev" style="height:${Math.round((r.dailyPrev[i] || 0) * 100 / max)}%;flex:.45"></i>`).join('')}</div>
+        <div class="row small muted" style="justify-content:space-between;margin-top:4px"><span>1</span><span>15</span><span>${r.dailyCur.length}</span></div></div>
+      <div class="card"><h3 style="margin-top:0">${esc(t('Best days of the week'))} <span class="small muted" style="text-transform:none;letter-spacing:0">${esc(t('last 90 days'))}</span></h3>
+        ${dowOrder.map(d => { const pct = Math.round(r.dow[d] * 100 / dmax); return `<div class="row small" style="gap:8px;margin:4px 0"><span style="width:34px">${dn[d]}</span><span style="flex:1;background:var(--surface-2);border-radius:6px;height:12px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:${pct >= 90 ? 'var(--gold)' : 'var(--navy-2)'};border-radius:6px"></span></span><span style="width:70px;text-align:right">${fmt(r.dow[d] / 13)}</span></div>`; }).join('')}
+        <p class="small muted" style="margin:6px 0 0">${esc(t('Average sales per day of the week.'))}</p></div>
+      <div class="card"><h3 style="margin-top:0">${esc(t('Busiest hours'))}</h3><div class="hm"><span></span>${hours.map(h => `<span style="text-align:center">${h % 2 === 0 ? h : ''}</span>`).join('')}
+        ${dowOrder.map(d => `<span>${dn[d]}</span>${hours.map(h => `<b style="background:rgba(0,51,102,${(0.05 + 0.9 * r.heat[d][h] / hmax).toFixed(2)})"></b>`).join('')}`).join('')}</div>
+        ${best.v ? `<p class="small muted" style="margin:8px 0 0">${esc(t('Busiest: {d} around {h}:00.', { d: dn[best.d], h: best.h }))}</p>` : ''}</div>
+      <div class="card"><h3 style="margin-top:0">${esc(t('Attendance'))}</h3>${r.attendance.length ? `<div class="tblwrap"><table class="tbl"><tr><th>${esc(t('Name'))}</th><th class="n">${esc(t('Shifts'))}</th><th class="n">${esc(t('Avg start'))}</th><th class="n">${esc(t('Late'))}</th><th class="n">${esc(t('Hours'))}</th></tr>
+        ${r.attendance.map(a => `<tr><td>${esc(a.name)}</td><td class="n">${a.shifts}</td><td class="n">${a.avgStart}</td><td class="n"><span class="pill ${a.late ? 'gold' : 'green'}">${a.late}</span></td><td class="n">${a.hours}</td></tr>`).join('')}</table></div>` : `<div class="empty small">—</div>`}</div>
+      ${r.foodTip ? `<div class="card tonal"><b>${esc(t('Fast Food closing time'))}</b><div class="small muted">${esc(t('{p}% of Fast Food sales come after 23:00 (about {x} SH a day). Closing time now: {c}.', { p: r.foodTip.sharePct, x: fmt(r.foodTip.perDay), c: r.foodTip.close }))}</div></div>` : ''}`;
+  }
+
+  /* ======================= MY EMAIL REPORTS ======================= */
+  Screens.emails = function (main) {
+    main.innerHTML = `<div id="me">${skel(1)}</div>`;
+    A.cachedCall('recip.mine', {}, r => {
+      if (!$('#me')) return;
+      if (!r.recipients.length) { $('#me').innerHTML = `<div class="card empty">${I('bell')}${esc(t('You are not on the email list yet. Ask the owner to add you in Settings → Email reports.'))}</div>`; return; }
+      $('#me').innerHTML = r.recipients.map(x => `<div class="card" data-id="${esc(x.id)}"><b>${esc(x.email)}</b><div class="small muted" style="margin:2px 0 10px">${esc(t('Choose how often you get the report'))}</div>
+        <div class="togs">${['daily', 'weekly', 'monthly'].map(k => `<button data-k="${k}" class="${num(x[k]) ? 'on' : ''}">${esc(t({ daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[k]))}</button>`).join('')}</div></div>`).join('') +
+        `<p class="small muted">${esc(t('Daily: 23:30 · Weekly: {d} night · Monthly: last day of the month.', { d: t(setting('weeklyDay') || 'Thu') }))}</p>`;
+      $$('#me .togs button').forEach(b => b.onclick = () => withBusy(b, async () => {
+        needOnline(); const card = b.closest('[data-id]'); b.classList.toggle('on');
+        const v = {}; $$('.togs button', card).forEach(x => v[x.dataset.k] = x.classList.contains('on') ? 1 : 0);
+        await api('recip.save', Object.assign({ id: card.dataset.id }, v)); toast(t('Saved'), 'ok');
+      }));
+    }).catch(e => { if ($('#me')) $('#me').innerHTML = notYet(e); });
+  };
+
+  /* ======================= SETTINGS: email reports, archive, reset ======================= */
+  function emailCard(box) {
+    A.cachedCall('recip.list', {}, r => {
+      if (!box.isConnected) return;
+      box.innerHTML = `<h3 style="margin-top:0">${esc(t('Email reports'))}</h3>${r.recipients.map(x => `<div class="li" style="padding:10px 0;align-items:flex-start" data-id="${esc(x.id)}"><span class="av ${x.userId ? 'gold' : ''}">${esc(String(x.name || x.email).slice(0, 1).toUpperCase())}</span>
+        <div class="main"><div class="name">${esc(x.name || x.email)}</div><div class="sub">${esc(x.email)}</div>
+        <div class="togs" style="margin-top:8px">${['daily', 'weekly', 'monthly', 'lowStock'].map(k => `<button data-k="${k}" class="${num(x[k]) ? 'on' : ''}">${esc(t({ daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', lowStock: 'Low stock' }[k]))}</button>`).join('')}</div>
+        <div class="row" style="margin-top:6px"><button class="btn sm text" data-test>${I('send', 'sm')}${esc(t('Send test'))}</button><button class="btn sm text" data-del style="color:var(--red)">${I('trash', 'sm')}${esc(t('Remove'))}</button></div></div></div>`).join('') || `<p class="small muted">${esc(t('Nobody gets email reports yet.'))}</p>`}
+        <button class="btn block ghost" id="addR" style="margin-top:8px">${I('plus')}${esc(t('Add person'))}</button>
+        <p class="small muted">${esc(t('Daily: 23:30 · Weekly: {d} night · Monthly: last day of the month. Low stock: at once.', { d: t(setting('weeklyDay') || 'Thu') }))}</p>`;
+      $$('[data-id] .togs button', box).forEach(b => b.onclick = () => withBusy(b, async () => {
+        needOnline(); const row = b.closest('[data-id]'); b.classList.toggle('on');
+        const v = {}; $$('.togs button', row).forEach(x => v[x.dataset.k] = x.classList.contains('on') ? 1 : 0);
+        await api('recip.save', Object.assign({ id: row.dataset.id }, v)); toast(t('Saved'), 'ok');
+      }));
+      $$('[data-test]', box).forEach(b => b.onclick = () => withBusy(b, async () => { needOnline(); await api('recip.test', { id: b.closest('[data-id]').dataset.id }); toast(t('Test email sent'), 'ok'); }));
+      $$('[data-del]', box).forEach(b => b.onclick = () => withBusy(b, async () => {
+        needOnline(); if (!(await confirmBox(t('Stop sending emails to this person?'), t('Remove'), 'red'))) return;
+        await api('recip.delete', { id: b.closest('[data-id]').dataset.id }); emailCard(box);
+      }));
+      $('#addR', box).onclick = () => {
+        const sh = sheet({ title: t('Add person'), body: `<form id="rf">${input('name', t('Name'), '')}${input('email', t('Email'), '', 'type="email" inputmode="email" autocomplete="off"')}
+          <label class="f"><span>${esc(t('Link to an app user (they can then change how often)'))}</span><select class="in" name="userId"><option value="">${esc(t('No — just email'))}</option>${r.users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select></label>
+          <div class="togs">${['daily', 'weekly', 'monthly', 'lowStock'].map(k => `<button type="button" data-k="${k}" class="${k === 'daily' ? 'on' : ''}">${esc(t({ daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', lowStock: 'Low stock' }[k]))}</button>`).join('')}</div></form>`,
+          actions: [{ label: t('Cancel'), cls: 'ghost' }, { label: t('Save'), cls: 'gold', onClick: async (close, el) => {
+            needOnline(); const f = formData($('#rf', el)), v = {}; $$('.togs button', el).forEach(x => v[x.dataset.k] = x.classList.contains('on') ? 1 : 0);
+            if (!f.name && f.userId) f.name = (r.users.find(u => u.id === f.userId) || {}).name;
+            await api('recip.save', Object.assign(f, v)); close(); toast(t('Saved'), 'ok'); emailCard(box);
+          } }] });
+        $$('.togs button', sh.el).forEach(b => b.onclick = () => b.classList.toggle('on'));
+      };
+    }).catch(e => { if (box.isConnected) box.innerHTML = `<h3 style="margin-top:0">${esc(t('Email reports'))}</h3>` + notYet(e); });
+  }
+  function dataCards(arch, danger) {
+    A.cachedCall('admin.counts', {}, c => {
+      if (!arch.isConnected) return;
+      const pct = Math.min(100, Math.round(c.salesRows * 100 / c.limit)), color = pct > 85 ? 'var(--red)' : pct > 60 ? 'var(--gold)' : 'var(--green)';
+      arch.innerHTML = `<h3 style="margin-top:0">${esc(t('Archive old data'))}</h3><div class="row small"><span class="grow">${esc(t('Sheet size'))}</span><b>${fmt(c.salesRows)} ${esc(t('sales rows'))}</b></div>
+        <div class="meter" style="margin:8px 0 4px"><i style="width:${Math.max(2, pct)}%;background:${color}"></i></div>
+        <div class="small muted">${esc(t('The app stays fast up to about {n} rows. Archive when the bar turns red.', { n: fmt(c.limit) }))}</div>
+        <div class="row small" style="margin-top:10px"><span class="grow">${esc(t('Last archive'))}</span><b>${c.archiveLinks.length ? esc(c.archiveLinks[c.archiveLinks.length - 1].name) : esc(t('Never'))}</b></div>
+        ${c.archiveLinks.map(l => `<div class="small"><a href="${esc(l.url)}" target="_blank" rel="noopener">${I('file', 'sm')} ${esc(l.name)}</a></div>`).join('')}
+        <button class="btn gold block" id="arcBtn" style="margin-top:12px">${I('box')}${esc(t('Archive old data…'))}</button>`;
+      $('#arcBtn', arch).onclick = () => archiveSheet(c);
+      danger.innerHTML = `<h3 style="margin-top:0;color:var(--red)">${esc(t('Danger zone'))}</h3><p class="small muted" style="margin:0 0 10px">${esc(t('Delete chosen data for good. A safety copy is always saved in the Archive first.'))}</p>
+        <button class="btn red block" id="rstBtn">${I('trash')}${esc(t('Reset data…'))}</button>`;
+      $('#rstBtn', danger).onclick = () => resetSheet(c);
+      if (pct > 85 && !A.LS.get('archNag_' + A.today().slice(0, 7))) { A.LS.set('archNag_' + A.today().slice(0, 7), 1); toast(t('The Sheet is getting big. Time to archive old data.'), 'warn', 6000); }
+    }).catch(e => { if (arch.isConnected) arch.innerHTML = notYet(e); });
+  }
+  function archiveSheet(c) {
+    const first = (y, m) => new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10), td = A.today(), y = +td.slice(0, 4), m = +td.slice(5, 7) - 1;
+    const opts = [['3', t('3 months (recommended)'), first(y, m - 2)], ['6', t('6 months'), first(y, m - 5)], ['12', t('1 year'), first(y, m - 11)]];
+    let cutoff = opts[0][2], prev = null;
+    const sh = sheet({ title: t('Archive old data'), sticky: true, body: `<label class="f"><span>${esc(t('Move data older than'))}</span><div class="chips" id="ao">${opts.map((o, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-d="${o[2]}">${esc(o[1])}</button>`).join('')}</div>
+      <input class="in" type="date" id="ad" value="${cutoff}" max="${td}" style="margin-top:8px"></label><div id="ap">${skel(2)}</div>`,
+      actions: [{ label: t('Cancel'), cls: 'ghost' }, { label: t('Archive now'), cls: 'gold', icon: 'box', onClick: async close => {
+        needOnline(); if (!prev || !prev.total) throw new Error(t('There is no data older than this date'));
+        if (!(await confirmBox(t('Move {n} rows to the archive "{p}"? They leave the app but stay in Google Drive.', { n: fmt(prev.total), p: prev.name }), t('Archive now'), 'gold'))) return;
+        const r = await api('admin.archive', { cutoff }, { timeout: 330000 });
+        close(); await A.refresh(true);
+        A.alertBox(t('Archive done'), `<p>${esc(t('{n} rows moved to the archive.', { n: fmt(r.total) }))}</p><p><a class="btn block" href="${esc(r.url)}" target="_blank" rel="noopener">${I('file')}${esc(t('Open the archive sheet'))}</a></p>`);
+        if (S.route === 'settings') A.render();
+      } }] });
+    const preview = () => { $('#ap', sh.el).innerHTML = skel(2); prev = null;
+      api('admin.archivePreview', { cutoff }).then(p => {
+        prev = p; const lbl = { Sales: t('Sales'), SaleItems: t('Sold items'), Shifts: t('Shifts'), CashMoves: t('Cash taken out'), Expenses: t('Expenses'), Refunds: t('Refunds'), CustLedger: t('Customer history'), SupLedger: t('Supplier history'), PurchaseOrders: t('Finished purchase orders'), StockLog: t('Stock history'), IngLog: t('Ingredient history'), Audit: t('Audit log') };
+        $('#ap', sh.el).innerHTML = !p.total ? `<div class="card empty small">${esc(t('There is no data older than this date'))}</div>` :
+          `<div class="card tonal" style="padding:12px 14px"><div class="small muted bold">${esc(t('PERIOD THAT WILL BE ARCHIVED'))}</div><div style="font-size:18px;font-weight:750;margin-top:4px">${esc(p.name)}</div><div class="small muted">${esc(p.from)} → ${esc(p.to)}</div></div>
+          <div class="grp">${esc(t('Moves to the archive'))}</div><div class="list">${Object.keys(p.counts).filter(k => p.counts[k]).map(k => `<div class="li"><div class="main name">${esc(lbl[k] || k)}</div><b>${fmt(p.counts[k])}</b></div>`).join('')}</div>
+          <div class="grp">${esc(t('Stays in the app'))}</div><p class="small" style="margin:4px 2px">${esc(t('Products, stock, customers, suppliers, employees, settings, all balances (carried forward), open orders, and monthly totals for Insights.'))}</p>
+          <div class="list"><div class="li lead"><span class="av gold">${I('box')}</span><div class="main"><div class="name">${esc(t('Saved in Google Drive'))}</div><div class="sub" style="white-space:normal">Saado POS Archive / ${esc(p.name)}</div></div></div></div>`;
+      }).catch(e => { $('#ap', sh.el).innerHTML = notYet(e); }); };
+    $$('#ao .chip', sh.el).forEach(b => b.onclick = () => { cutoff = b.dataset.d; $('#ad', sh.el).value = cutoff; $$('#ao .chip', sh.el).forEach(x => x.classList.toggle('on', x === b)); preview(); });
+    $('#ad', sh.el).onchange = () => { cutoff = $('#ad', sh.el).value; $$('#ao .chip', sh.el).forEach(x => x.classList.remove('on')); preview(); };
+    preview();
+  }
+  function resetSheet(c) {
+    const n = c.counts, groups = [
+      [t('Selling'), [['sales', t('Sales, sold items & refunds'), fmt(n.Sales)], ['shifts', t('Shifts & cash taken out'), fmt(n.Shifts)], ['expenses', t('Expenses'), fmt(n.Expenses)]]],
+      [t('Customers'), [['customers', t('Customers (names & history)'), fmt(n.Customers)], ['custBalances', t('Customer balances only'), money(c.customerDebt), t('Sets every debt to 0, keeps the customers')]]],
+      [t('Suppliers'), [['suppliers', t('Suppliers & purchase orders'), fmt(n.Suppliers)], ['supBalances', t('Supplier balances only'), money(c.supplierOwed), t('Sets what we owe to 0')]]],
+      [t('Stock'), [['products', t('Products'), fmt(n.Products)], ['stockQty', t('Stock quantities only'), '', t('Sets every product to 0 (before a full count)')], ['ingredients', t('Ingredients stock'), fmt(n.Ingredients)]]],
+      [t('Team & records'), [['employees', t('Employee logins'), c.employees.join(', '), t('Your own owner login is never deleted')], ['audit', t('Audit log'), fmt(n.Audit)], ['settings', t('Settings back to default'), '']]],
+      [t('Google Drive'), [['backups', t('Old nightly backups'), fmt(c.backups) + ' ' + t('files'), t('The Archive folder can never be reset')]]]];
+    const all = {}; groups.forEach(g => g[1].forEach(x => all[x[0]] = x));
+    sheet({ title: t('Reset data — step 1 of 2'), sticky: true, body: `<p class="small muted" style="margin:0 2px 4px">${esc(t('Tick what to delete. Everything not ticked stays.'))}</p>` +
+      groups.map(g => `<div class="grp">${esc(g[0])}</div>` + g[1].map(x => `<label class="chk"><input type="checkbox" data-p="${x[0]}"><span class="main"><b style="font-weight:600">${esc(x[1])}</b>${x[3] ? `<div class="cnt">${esc(x[3])}</div>` : ''}</span><span class="cnt">${esc(x[2])}</span></label>`).join('')).join(''),
+      actions: [{ label: t('Cancel'), cls: 'ghost' }, { label: t('Next'), cls: 'red', onClick: (close, el) => {
+        const parts = $$('[data-p]', el).filter(i => i.checked).map(i => i.dataset.p);
+        if (!parts.length) throw new Error(t('Tick at least one thing to reset'));
+        close(); setTimeout(() => resetConfirm(parts, all), 200);
+      } }] });
+  }
+  function resetConfirm(parts, all) {
+    const waiting = S.queue.length;
+    sheet({ title: t('Reset data — step 2 of 2'), sticky: true, body: `<div class="card danger" style="padding:14px"><b class="red">${esc(t('This will delete for good:'))}</b>
+      <ul style="margin:8px 0 0;padding-left:18px;line-height:1.7">${parts.map(p => `<li>${esc(all[p][1])}${all[p][2] ? ' (' + esc(all[p][2]) + ')' : ''}</li>`).join('')}</ul></div>
+      <div class="list"><div class="li lead"><span class="av green">${I('shield')}</span><div class="main"><div class="name">${esc(t('Safety copy first'))}</div><div class="sub" style="white-space:normal">${esc(t('A full copy is saved to Saado POS Archive / Resets before anything is deleted.'))}</div></div></div>
+      <div class="li lead"><span class="av gold">${I('alert')}</span><div class="main"><div class="name" style="white-space:normal">${esc(t('Phones with unsent sales'))}</div><div class="sub" style="white-space:normal">${esc(t('Anything still waiting on a phone is thrown away after the reset.'))}${waiting ? ' ' + esc(t('This phone: {n}.', { n: waiting })) : ''}</div></div></div></div>
+      <label class="f"><span>${esc(t('Type RESET to confirm'))}</span><input class="in" id="rc" autocomplete="off" style="font-weight:800;letter-spacing:3px" placeholder="RESET"></label>
+      <label class="f"><span>${esc(t('Your PIN'))}</span><input class="in" id="rp" type="password" inputmode="numeric" autocomplete="off" style="letter-spacing:6px"></label>
+      <p class="small muted">${esc(t('A line “Reset by {n}” is always kept in the audit log.', { n: S.user.name }))}</p>`,
+      actions: [{ label: t('Back'), cls: 'ghost' }, { label: t('Delete'), cls: 'red', icon: 'trash', onClick: async (close, el) => {
+        needOnline();
+        if ($('#rc', el).value.trim().toUpperCase() !== 'RESET') throw new Error(t('Type RESET to confirm'));
+        const r = await api('admin.reset', { parts, confirm: $('#rc', el).value, pin: $('#rp', el).value }, { timeout: 330000 });
+        close();
+        A.LS.set('dataVersion', String(r.dataVersion));
+        S.queue = []; S.failed = []; A.LS.set('queue', []); A.LS.set('failed', []);
+        await A.refresh(true); A.drawShell(); A.render();
+        A.alertBox(t('Reset done'), `<p>${esc(t('The chosen data was deleted.'))}</p><p class="small muted">${esc(t('Safety copy:'))} <a href="${esc(r.safetyCopy.url)}" target="_blank" rel="noopener">${esc(r.safetyCopy.name)}</a></p>`);
+      } }] });
+  }
 
   /* ======================= AUDIT, EXPORT, SYNC, PIN ======================= */
   Screens.audit = function (main) {

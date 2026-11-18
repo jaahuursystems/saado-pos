@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.1.1';
+  const APP_VERSION = '1.2.0';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -54,7 +54,8 @@
   /* ---------------- permissions ---------------- */
   const isOwner = () => S.user && S.user.role === 'owner';
   const can = p => isOwner() || (S.user && S.user.perms.indexOf(p) >= 0);
-  const myBiz = () => !S.user ? [] : (isOwner() || S.user.business === 'both') ? ['shop', 'food'] : [S.user.business];
+  const foodOn = () => !(S.data && S.data.settings && S.data.settings.food_enabled === '0');
+  const myBiz = () => !S.user ? [] : ((isOwner() || S.user.business === 'both') ? ['shop', 'food'] : [S.user.business]).filter(b => b !== 'food' || foodOn());
   const setting = k => S.data ? S.data.settings[k] : '';
   const prods = (b) => (S.data ? S.data.products : []).filter(p => p.business === (b || S.biz) && String(p.active) !== '0');
   const findProd = id => (S.data ? S.data.products : []).find(p => p.id === id);
@@ -69,6 +70,7 @@
     if (/^HOURS/.test(m)) return t('Outside working hours. Ask an owner for access.');
     if (/^SHIFT/.test(m)) return t('Start a shift before selling.');
     if (/^LOCKED/.test(m)) return t('Too many wrong PINs. Wait 5 minutes.');
+    if (/^CLOSED/.test(m) || /Fast Food is closed/.test(m)) return t('Fast Food is closed. Ask the owner.');
     if (/^NOPERM/.test(m)) return t('You do not have permission for this.');
     const w = m.match(/^Wrong PIN \((\d+)/); if (w) return t('Wrong PIN. {n} tries left.', { n: w[1] });
     return t(m);
@@ -125,7 +127,8 @@
       while (true) {
         const batch = S.queue.filter(o => o.userId === S.user.id).slice(0, 15);
         if (!batch.length) break;
-        const r = await api('sync', { ops: batch.map(o => ({ qid: o.qid, action: o.action, data: o.data })) }, { timeout: 60000 });
+        const r = await api('sync', { dataVersion: LS.get('dataVersion', ''), ops: batch.map(o => ({ qid: o.qid, action: o.action, data: o.data })) }, { timeout: 60000 });
+        if (r.reset) { dataWasReset(r.dataVersion); break; }
         let stop = false;
         r.results.forEach(res => {
           const op = S.queue.find(o => o.qid === res.qid);
@@ -140,6 +143,15 @@
     } catch (e) {
       if (e.kind !== 'network') console.warn(e);
     } finally { S.syncing = false; updateTop(); if (window.Screens && Screens.onSync) Screens.onSync(); }
+  }
+  // The owner reset the data: whatever this phone still had waiting belongs to the old data, so it is dropped.
+  function dataWasReset(v) {
+    const n = S.queue.length;
+    S.queue = []; S.failed = []; S.cart = []; LS.set('queue', []); LS.set('failed', []); LS.set('parked', []); S.parked = [];
+    LS.get('ckeys', []).forEach(k => LS.del(k.replace(/^saado_/, ''))); LS.set('ckeys', []);
+    LS.set('dataVersion', String(v || ''));
+    toast(t('The owner reset the data.') + (n ? ' ' + t('{n} unsent items on this phone were removed.', { n }) : ''), 'warn', 7000);
+    refresh(true).then(() => { drawShell(); render(); });
   }
   function applyResult(op, r) {
     if (!r || !S.data) return;
@@ -160,6 +172,8 @@
   /* ---------------- session ---------------- */
   function startSession(b) {
     S.token = b.token; S.expires = b.expires; S.user = b.user; S.data = b;
+    const dv = String(b.settings && b.settings.dataVersion || ''), had = LS.get('dataVersion', '');
+    if (had && dv && had !== dv) setTimeout(() => dataWasReset(dv), 50); else if (dv) LS.set('dataVersion', dv);
     S.lang = b.user.lang || S.lang; LS.set('lang', S.lang);
     LS.set('session', { token: S.token, expires: S.expires, user: S.user });
     LS.set('sess_' + S.user.id, { token: S.token, expires: S.expires, user: S.user }); S.offlineSession = false;
@@ -173,6 +187,9 @@
       const sig = d => d ? JSON.stringify([d.products, d.customers, d.suppliers, d.ingredients, d.shifts, d.settings, d.pendingRefunds, d.user]) : '';
       const before = sig(S.data);
       const tok = S.token, exp = S.expires;
+      const dv = String(b.settings && b.settings.dataVersion || ''), had = LS.get('dataVersion', '');
+      if (had && dv && had !== dv) { S.data = b; dataWasReset(dv); return 'changed'; }
+      if (dv) LS.set('dataVersion', dv);
       S.data = b; S.user = b.user; S.token = tok; S.expires = exp;
       LS.set('session', { token: S.token, expires: S.expires, user: S.user });
       // re-apply sales still waiting in the queue so local stock stays right
@@ -348,7 +365,7 @@
   }
 
   /* ---------------- shell ---------------- */
-  const TITLES = { home: 'Home', sell: 'Sell', shift: 'Shift', customers: 'Customers', expenses: 'Expenses', more: 'More', products: 'Products', stockcount: 'Stock count',
+  const TITLES = { insights: 'Insights', emails: 'My email reports', home: 'Home', sell: 'Sell', shift: 'Shift', customers: 'Customers', expenses: 'Expenses', more: 'More', products: 'Products', stockcount: 'Stock count',
     purchasing: 'Purchasing', ingredients: 'Ingredients', refunds: 'Refunds', reports: 'Reports', users: 'Users', settings: 'Settings', audit: 'Audit log', sync: 'Sync status', pin: 'My PIN', guide: 'Guide' };
   function navItems() {
     const n = [];
@@ -481,6 +498,9 @@
       if (can('expenses')) jobs.push(['exp.list', { business: S.biz, from: td, to: td }]);
       if (can('suppliers')) jobs.push(['po.list', { business: S.biz }]);
       if (can('manageUsers')) jobs.push(['users.list', {}]);
+      if (can('viewInsights')) jobs.push(['insights', { month: td.slice(0, 7), business: bizs.length > 1 ? 'all' : bizs[0] }]);
+      if (can('settings')) jobs.push(['recip.list', {}]);
+      if (isOwner()) jobs.push(['admin.counts', {}]);
       if (can('audit')) jobs.push(['audit.list', { from: addDays(td, -2), to: td, q: '' }]);
       if (S.biz === 'food' && (can('ingredients') || can('manageProducts'))) jobs.push(['ing.log', { from: addDays(td, -6), to: td }]);
       const sh = myShift(); if (sh && !S.queue.some(o => o.data && o.data.id === sh.id)) jobs.push(['shift.preview', { id: sh.id }]);
@@ -500,12 +520,13 @@
   setInterval(backgroundUpdate, 120000);   // every 2 minutes: other users' changes appear without anyone waiting
 
   /* ---------------- UI helpers ---------------- */
-  function toast(msg, type, ms) {
+  function toast(msg, type, ms, action) {
     const box = document.getElementById('toasts');
     while (box.children.length >= 1) box.firstChild.remove();
     const el = document.createElement('div'); el.className = 'toast ' + (type || '');
-    el.innerHTML = icon(type === 'ok' ? 'okcircle' : type === 'err' || type === 'warn' ? 'alert' : 'bell') + '<span></span>';
+    el.innerHTML = icon(type === 'ok' ? 'okcircle' : type === 'err' || type === 'warn' ? 'alert' : 'bell') + '<span></span>' + (action ? '<button class="tact"></button>' : '');
     el.querySelector('span').textContent = msg;
+    if (action) { const b = el.querySelector('.tact'); b.textContent = action.label; b.onclick = e => { e.stopPropagation(); el.remove(); action.fn(); }; }
     box.appendChild(el);
     el.onclick = () => el.remove();
     setTimeout(() => el.remove(), ms || (type === 'err' ? 5000 : 2400));
@@ -820,7 +841,7 @@
 
   window.App = {
     S, LS, CFG, APP_VERSION, t, esc, num, fmt, money, usd, rate, roundStep, uid, today, addDays, when, localParts, bizName, methodName,
-    icon, installApp, isStandalone, rememberPin, cachedCall, cacheGet, prefetch, softRender, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
+    icon, installApp, isStandalone, rememberPin, foodOn, cachedCall, cacheGet, prefetch, softRender, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
     toast, sheet, confirmBox, alertBox, withBusy, formData, seg, input, moneyInput, beep, go, render, drawShell, updateTop,
     startCamera, stopCamera, scanOnce, toCSV, download, parseCSV, readXLSX, makeDocPDF, shareFile, openWhatsApp, start
   };

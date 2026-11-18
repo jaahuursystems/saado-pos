@@ -1,7 +1,7 @@
 /* Saado POS — service worker: keeps the app working offline.
    IMPORTANT: change VERSION on every release so phones download the new files. */
-const VERSION = 'saado-v1.1.1';
-const SHELL = ['./', 'index.html', 'app.css?v=1.1.1', 'config.js?v=1.1.1', 'i18n.js?v=1.1.1', 'guide.js?v=1.1.1', 'app.js?v=1.1.1', 'screens.js?v=1.1.1',
+const VERSION = 'saado-v1.2.0';
+const SHELL = ['./', 'index.html', 'app.css?v=1.2.0', 'config.js?v=1.2.0', 'i18n.js?v=1.2.0', 'guide.js?v=1.2.0', 'app.js?v=1.2.0', 'screens.js?v=1.2.0',
   'manifest.json', 'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/favicon.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
