@@ -770,6 +770,9 @@ window.SO = {
   "The date cannot be in the future": "Taariikhdu ma noqon karto mustaqbal",
   "Enter a valid email address": "Geli cinwaan iimayl oo sax ah",
   "Type RESET to confirm.": "Qor RESET si aad u xaqiijiso.",
+  // added in v1.2.1
+  "Logging in… please wait": "Waa la gelayaa… fadlan sug",
+  "Still checking — the internet is slow. Please wait.": "Weli waa la hubinayaa — internet-ku waa gaabis. Fadlan sug.",
   // messages that come from the server
   'Cart is empty': 'Dambiishu waa madhan tahay',
   'Choose a payment method': 'Dooro habka lacag-bixinta',

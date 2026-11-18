@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.2.1';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -89,11 +89,12 @@
       res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, data: data || {}, token: S.token }), redirect: 'follow', signal: ctl ? ctl.signal : undefined });
     } catch (e) {
       const aborted = e && e.name === 'AbortError';
-      setOnline(false);
+      netFails++;
+      if (!navigator.onLine || (!aborted && netFails >= 2)) setOnline(false);
       throw new AppError(!navigator.onLine ? t('No internet connection.') : aborted ? t('The script took too long to answer. Check the internet and try again.')
         : t('Cannot reach the script. Check the internet. If it keeps happening, the Apps Script deployment must have access "Anyone".'), 'network');
     } finally { clearTimeout(timer); progress(-1); }
-    setOnline(true);
+    netFails = 0; setOnline(true);
     const text = await res.text();
     let j;
     try { j = JSON.parse(text); } catch (e) {
@@ -106,7 +107,7 @@
     }
     return j;
   }
-  let busyCount = 0;
+  let busyCount = 0, netFails = 0;
   function progress(d) { busyCount = Math.max(0, busyCount + d); }   // background work is invisible on purpose (no loading bar)
 
   function setOnline(v) { if (S.online !== v) { S.online = v; updateTop(); } }
@@ -335,26 +336,40 @@
     const pad = document.getElementById('pad');
     pad.innerHTML = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'bk', '0', 'OK'].map(k => `<button data-k="${k}" class="${k === 'OK' ? 'go' : k === 'bk' ? 'bk' : ''}" aria-label="${k === 'bk' ? 'delete' : k}">${k === 'OK' ? esc(t('Enter')) : k === 'bk' ? icon('backspace', 'lg') : k}</button>`).join('');
     const err = m => { const e = document.getElementById('lgerr'); if (e) e.textContent = m; const ps = document.getElementById('pinshow'); if (ps) { ps.classList.remove('shake'); void ps.offsetWidth; ps.classList.add('shake'); } if (navigator.vibrate) navigator.vibrate(120); };
+    let busy = false, slowT = null;
+    // While the PIN is being checked: the Enter button spins, the keypad is locked and a clear "please wait" shows, so nobody taps twice.
+    const setBusy = on => {
+      busy = on; pad.classList.toggle('busy', on);
+      const go = pad.querySelector('.go'); if (go) go.innerHTML = on ? '<span class="spin"></span>' : esc(t('Enter'));
+      const ps = document.getElementById('pinshow'); if (ps) ps.classList.toggle('pulse', on);
+      const e = document.getElementById('lgerr'); clearTimeout(slowT);
+      if (on) {
+        e.innerHTML = `<span class="lgwait"><span class="spin"></span>${esc(t('Logging in… please wait'))}</span>`;
+        slowT = setTimeout(() => { const w = document.querySelector('.lgwait'); if (w) w.innerHTML = `<span class="spin"></span>${esc(t('Still checking — the internet is slow. Please wait.'))}`; }, 6000);
+      } else if (e.querySelector('.lgwait')) e.textContent = '';
+    };
     const submit = async () => {
+      if (busy) return;
       if (!sel) return err(t('Choose your name'));
       if (pin.length < 4) return err(t('PIN must be 4 to 6 digits'));
-      const e = document.getElementById('lgerr'); e.innerHTML = `<span class="muted">${esc(t('Checking…'))}</span>`;
+      setBusy(true);
       try {
         let b = null;
         try { b = await api('login', { userId: sel, pin }); }
         catch (x) { if (x.kind !== 'network' && x.kind !== 'config') throw x; }
-        if (b) { LS.set('lastUser', sel); rememberPin(sel, pin).catch(() => {}); main.style.padding = ''; startSession(b); boot(); setTimeout(prefetch, 1500); return; }
-        if (await offlineUnlock(sel, pin)) { LS.set('lastUser', sel); main.style.padding = ''; boot(); toast(t('Offline: sales are saved on this phone and sent later.'), 'warn', 4000); return; }
+        if (b) { setBusy(false); LS.set('lastUser', sel); rememberPin(sel, pin).catch(() => {}); main.style.padding = ''; startSession(b); boot(); setTimeout(prefetch, 1500); return; }
+        if (await offlineUnlock(sel, pin)) { setBusy(false); LS.set('lastUser', sel); main.style.padding = ''; boot(); toast(t('Offline: sales are saved on this phone and sent later.'), 'warn', 4000); return; }
         throw new AppError(t('No internet. This person must log in once with internet on this phone first.'), 'app');
-      } catch (x) { pin = ''; drawPin(); err(x.message); }
+      } catch (x) { setBusy(false); pin = ''; drawPin(); err(x.message); }
     };
     pad.querySelectorAll('button').forEach(b => b.onclick = () => {
+      if (busy) return;
       const k = b.dataset.k;
       if (k === 'bk') pin = pin.slice(0, -1); else if (k === 'OK') return submit(); else if (pin.length < 6) pin += k;
       drawPin(); if (navigator.vibrate) navigator.vibrate(8);
       if (pin.length === 6) submit();
     });
-    document.onkeydown = e => { if (!document.getElementById('pad')) { document.onkeydown = null; return; } if (/^\d$/.test(e.key) && pin.length < 6) { pin += e.key; drawPin(); } else if (e.key === 'Backspace') { pin = pin.slice(0, -1); drawPin(); } else if (e.key === 'Enter') submit(); };
+    document.onkeydown = e => { if (!document.getElementById('pad')) { document.onkeydown = null; return; } if (busy) return; if (/^\d$/.test(e.key) && pin.length < 6) { pin += e.key; drawPin(); } else if (e.key === 'Backspace') { pin = pin.slice(0, -1); drawPin(); } else if (e.key === 'Enter') submit(); };
     drawSel(); drawPin();
     try {
       const r = await api('names', {});
@@ -503,7 +518,7 @@
       if (isOwner()) jobs.push(['admin.counts', {}]);
       if (can('audit')) jobs.push(['audit.list', { from: addDays(td, -2), to: td, q: '' }]);
       if (S.biz === 'food' && (can('ingredients') || can('manageProducts'))) jobs.push(['ing.log', { from: addDays(td, -6), to: td }]);
-      const sh = myShift(); if (sh && !S.queue.some(o => o.data && o.data.id === sh.id)) jobs.push(['shift.preview', { id: sh.id }]);
+      const sh = myShift(); if (sh && !S.queue.some(o => o.data && o.data.id === sh.id)) jobs.unshift(['shift.live', { id: sh.id }]);
       for (const [a, d] of jobs) {
         if (!S.online || !S.token) break;
         try { cachePut(a, d, await api(a, d)); } catch (e) { if (e.kind === 'network') break; }
@@ -841,7 +856,7 @@
 
   window.App = {
     S, LS, CFG, APP_VERSION, t, esc, num, fmt, money, usd, rate, roundStep, uid, today, addDays, when, localParts, bizName, methodName,
-    icon, installApp, isStandalone, rememberPin, foodOn, cachedCall, cacheGet, prefetch, softRender, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
+    icon, installApp, isStandalone, rememberPin, foodOn, cachedCall, cacheGet, cachePut, prefetch, softRender, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
     toast, sheet, confirmBox, alertBox, withBusy, formData, seg, input, moneyInput, beep, go, render, drawShell, updateTop,
     startCamera, stopCamera, scanOnce, toCSV, download, parseCSV, readXLSX, makeDocPDF, shareFile, openWhatsApp, start
   };

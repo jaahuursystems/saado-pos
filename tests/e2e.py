@@ -79,7 +79,16 @@ with sync_playwright() as p:
     logout(page)
 
     # ---------- Raxma, shop employee ----------
-    login(page, 'Raxma'); page.wait_for_selector('#q')
+    # login button shows a clear wait state and ignores extra taps
+    urllib.request.urlopen(BASE + '/__delay?ms=1500')
+    page.goto(BASE + '/'); page.wait_for_selector('#dd'); page.click('#dd'); page.click('.ddlist button:has-text("Raxma")')
+    for d in pins['Raxma']: page.click(f'.pad button[data-k="{d}"]')
+    page.click('.pad button.go'); page.wait_for_selector('.pad.busy .go .spin'); page.wait_for_selector('.lgwait')
+    page.screenshot(path=SHOTS + '00-login-wait.png')
+    page.click('.pad button.go', force=True)
+    page.wait_for_selector('#nav:not(.hidden)', timeout=8000); urllib.request.urlopen(BASE + '/__delay?ms=0')
+    step('login: Enter button spins, keypad locked, "please wait" shown, double tap ignored')
+    page.wait_for_selector('#q')
     assert page.locator('.bizswitch').count() == 0
     assert page.locator('#goShift').count() == 1; step('employee sees only her business and is asked to start a shift')
     page.click('#goShift'); page.fill('[name=openCash]', '100000'); page.fill('[name=openZaadSH]', '20000'); page.click('#of button')
@@ -150,7 +159,16 @@ with sync_playwright() as p:
     page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
     assert len(sheet('CashMoves')) == 1; step('cash taken out of the drawer (10,000 SH)')
     # ---------- end shift ----------
-    page.goto(BASE + '/#shift'); page.wait_for_selector('#cmp input[name=closeCash]'); page.wait_for_timeout(800)
+    page.goto(BASE + '/#sell'); page.wait_for_timeout(2500)
+    reqs = []
+    page.on('request', lambda r: reqs.append(json.loads(r.post_data or '{}').get('action')) if '/exec' in r.url else None)
+    page.goto(BASE + '/#shift'); page.wait_for_selector('#cmp input[name=closeCash]'); page.wait_for_timeout(1500)
+    acts = [a for a in reqs if a not in ('sync',)]
+    assert acts.count('shift.live') == 1 and 'sales.list' not in acts and 'shift.preview' not in acts, acts; step('shift tab opens at once with ONE server request (%s)' % ','.join(acts))
+    page.fill('#cmp [name=closeCash]', '1'); page.focus('#cmp [name=closeCash]')
+    page.evaluate("App.syncNow && window.Screens.onSync()"); page.wait_for_timeout(800)
+    assert page.evaluate("document.activeElement && document.activeElement.name") == 'closeCash' and page.input_value('#cmp [name=closeCash]') == '1'; step('fresh numbers arrive without interrupting typing')
+    page.fill('#cmp [name=closeCash]', '')
     # expected cash SH = 100000 - 750 change + 20000 debt paid - 5000 expense - 10000 cash out = 104,250 ; USD = $5
     exp = page.inner_text('#expNow'); assert '104,250' in exp and '$5' in exp, exp
     page.screenshot(path=SHOTS + '10-shift.png', full_page=True)

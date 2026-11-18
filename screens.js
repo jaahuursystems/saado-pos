@@ -321,44 +321,61 @@
     }
     if (isOwner() || can('viewReports')) loadShiftHistory();
   };
-  async function loadLive(sh) {
-    let srv = null, moves = [];
-    const draw = () => {
-      if (!$('#cmp')) return;
+  // The Shift screen draws at once from what the phone already knows, then asks the server ONE time for fresh numbers.
+  let liveReq = null;
+  function loadLive(sh, force) {
+    const key = { id: sh.id };
+    const draw = r => {
+      if (!$('#cmp') || S.route !== 'shift') return;
+      const srv = r ? r.totals : null, moves = (r && r.moves) || [];
       const x = liveTotals(sh, srv);
-      $('#expNow').textContent = money(x.eCashSH) + (x.eCashUSD ? ' · ' + usdF(x.eCashUSD) : '');
-      // cash taken out (saved + waiting on this phone)
+      $('#expNow').innerHTML = srv || !S.online || S.queue.some(o => o.data && o.data.id === sh.id) ? esc(money(x.eCashSH) + (x.eCashUSD ? ' · ' + usdF(x.eCashUSD) : '')) : '<span class="skel" style="display:inline-block;width:150px;height:30px;margin:0;opacity:.35"></span>';
       const qMoves = S.queue.filter(o => o.action === 'cash.out' && o.data.business === sh.business).map(o => Object.assign({ pending: 1, ts: o.ts, userName: o.userName }, o.data));
       const allMoves = moves.concat(qMoves);
       $('#moves').innerHTML = allMoves.length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${allMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div>
         <div class="sub">${m.pending ? esc(t('Waiting to send')) : A.when(m.ts)} · ${esc(t(m.reason || ''))}${m.userName ? ' · ' + esc(t('recorded by {n}', { n: m.userName })) : ''}</div></div></div>`).join('')}</div>` : '';
       drawCompare(sh, x);
-      drawMySales(sh);
+      drawMySales(sh, (r && r.sales) || []);
     };
-    if (S.queue.some(o => o.data && o.data.id === sh.id)) return draw();   // the shift itself is not sent yet
-    const hit = A.cacheGet('shift.preview', { id: sh.id });
-    if (hit) { srv = hit.totals; moves = hit.moves || []; }
-    draw();
-    A.syncNow().then(() => A.cachedCall('shift.preview', { id: sh.id }, r => { srv = r.totals; moves = r.moves || []; draw(); })).catch(() => {});
+    const hit = A.cacheGet('shift.live', key);
+    draw(hit);
+    if (!S.online || S.queue.some(o => o.data && o.data.id === sh.id)) return;   // offline, or the shift itself is not sent yet
+    if (!force && liveReq && liveReq.id === sh.id) return liveReq.p.then(draw).catch(() => {});
+    const p = (async () => {
+      if (S.queue.some(o => o.userId === S.user.id)) await A.syncNow();
+      const r = await A.api('shift.live', key);
+      A.cachePut('shift.live', key, r);
+      return r;
+    })();
+    liveReq = { id: sh.id, p };
+    p.then(draw).catch(() => {}).finally(() => { if (liveReq && liveReq.p === p) liveReq = null; });
   }
   // Each account: expected vs counted with a tick; totals in SH and USD are added up by the app.
   function drawCompare(sh, x) {
     const box = $('#cmp'); if (!box) return;
-    const keep = {}; $$('#cmp input').forEach(i => keep[i.name] = i.value);
+    if (box.dataset.built) {   // already on screen: only refresh the expected numbers, never touch what the person typed
+      const set = { closeCash: x.eCashSH, closeZaadSH: x.eZaadSH, closeEdSH: x.eEdSH, closeCashUSD: x.eCashUSD, closeZaadUSD: x.eZaadUSD, closeEdUSD: x.eEdUSD };
+      Object.keys(set).forEach(n => { const i = $(`#cmp [name=${n}]`); i.dataset.exp = set[n]; $(`[data-e="${n}"]`).textContent = i.dataset.cur === 'USD' ? usdF(set[n]) : fmt(set[n]); });
+      $('[data-e="totSH"]').textContent = fmt(x.totalSH); $('[data-e="totUSD"]').textContent = usdF(x.totalUSD); $('[data-e="all"]').textContent = fmt(x.totalSH + x.totalUSD * x.rate);
+      box._x = x; box._upd(); return;
+    }
+    box.dataset.built = '1';
+    const keep = {};
     const rows = [['SH', [['closeCash', t('Cash'), x.eCashSH], ['closeZaadSH', 'Zaad', x.eZaadSH], ['closeEdSH', 'Edahab', x.eEdSH]]],
                   ['USD', [['closeCashUSD', t('Cash'), x.eCashUSD], ['closeZaadUSD', 'Zaad', x.eZaadUSD], ['closeEdUSD', 'Edahab', x.eEdUSD]]]];
     box.innerHTML = `<table class="tbl cmp"><tr><th></th><th class="n">${esc(t('Expected'))}</th><th class="n">${esc(t('Counted'))}</th><th></th></tr>` +
       rows.map(([cur, list]) => `<tr><td colspan="4" class="small bold" style="color:var(--navy);padding-top:12px">${cur === 'SH' ? esc(t('SHILLING (SH)')) : esc(t('DOLLARS (USD)'))}</td></tr>` +
-        list.map(([n, l, e]) => `<tr><td>${esc(l)}</td><td class="n">${cur === 'USD' ? usdF(e) : fmt(e)}</td><td class="n" style="width:112px"><input name="${n}" data-exp="${e}" data-cur="${cur}" inputmode="${cur === 'USD' ? 'decimal' : 'numeric'}" value="${esc(keep[n] || '')}" placeholder="0"></td><td class="n" style="width:30px" data-tick="${n}"></td></tr>`).join('') +
-        `<tr style="font-weight:750"><td>${esc(t('Total'))} ${cur}</td><td class="n">${cur === 'USD' ? usdF(x.totalUSD) : fmt(x.totalSH)}</td><td class="n" data-sum="${cur}"></td><td class="n" data-tick="sum${cur}"></td></tr>`).join('') +
+        list.map(([n, l, e]) => `<tr><td>${esc(l)}</td><td class="n" data-e="${n}">${cur === 'USD' ? usdF(e) : fmt(e)}</td><td class="n" style="width:112px"><input name="${n}" data-exp="${e}" data-cur="${cur}" inputmode="${cur === 'USD' ? 'decimal' : 'numeric'}" value="${esc(keep[n] || '')}" placeholder="0"></td><td class="n" style="width:30px" data-tick="${n}"></td></tr>`).join('') +
+        `<tr style="font-weight:750"><td>${esc(t('Total'))} ${cur}</td><td class="n" data-e="tot${cur}">${cur === 'USD' ? usdF(x.totalUSD) : fmt(x.totalSH)}</td><td class="n" data-sum="${cur}"></td><td class="n" data-tick="sum${cur}"></td></tr>`).join('') +
       `</table><div class="card tonal" style="margin:12px 0 0;padding:12px 14px"><div class="small muted bold">${esc(t('EVERYTHING IN SH (1 USD = {r})', { r: fmt(x.rate) }))}</div>
-      <div class="row" style="margin-top:6px"><span class="grow">${esc(t('Expected'))}</span><b>${fmt(x.totalSH + x.totalUSD * x.rate)}</b></div><div class="row"><span class="grow">${esc(t('Counted'))}</span><b id="allC">0</b></div>
+      <div class="row" style="margin-top:6px"><span class="grow">${esc(t('Expected'))}</span><b data-e="all">${fmt(x.totalSH + x.totalUSD * x.rate)}</b></div><div class="row"><span class="grow">${esc(t('Counted'))}</span><b id="allC">0</b></div>
       <div class="row"><span class="grow">${esc(t('Difference'))}</span><span id="allD"></span></div></div>
-      ${x.waiting ? `<p class="small muted" style="margin:8px 0 0">${esc(t('Includes {n} items saved on this phone, not sent yet.', { n: x.waiting }))}</p>` : ''}
+      <p class="small muted" id="cwait" style="margin:8px 0 0"></p>
       <p class="small muted" style="margin:8px 0 0">${esc(t('Totals are added up by the app. Only type what you counted in each account.'))}</p>`;
     const tick = (ok, empty) => empty ? '' : `<span class="tick ${ok ? '' : 'bad'}">${I(ok ? 'check' : 'x')}</span>`;
-    const upd = () => {
-      const sum = { SH: 0, USD: 0 }, any = { SH: false, USD: false };
+    box._x = x;
+    const upd = box._upd = () => {
+      const x = box._x, sum = { SH: 0, USD: 0 }, any = { SH: false, USD: false };
       $$('#cmp input').forEach(i => {
         const v = num(i.value), e = num(i.dataset.exp), c = i.dataset.cur; sum[c] += v; if (i.value !== '') any[c] = true;
         $(`[data-tick="${i.name}"]`).innerHTML = tick(Math.abs(v - e) < (c === 'USD' ? 0.005 : 0.5), i.value === '');
@@ -369,16 +386,16 @@
       $('[data-tick="sumUSD"]').innerHTML = tick(Math.abs(sum.USD - x.totalUSD) < 0.005, !any.SH && !any.USD);
       const all = sum.SH + sum.USD * x.rate, diff = Math.round(all - (x.totalSH + x.totalUSD * x.rate));
       $('#allC').textContent = fmt(all); $('#allD').innerHTML = diffTxt(diff);
+      $('#cwait').textContent = x.waiting ? t('Includes {n} items saved on this phone, not sent yet.', { n: x.waiting }) : '';
     };
     $$('#cmp input').forEach(i => i.oninput = upd); upd();
   }
   // Sales made in this shift, newest first, each with Undo (needs the undoSales permission).
-  function drawMySales(sh) {
+  function drawMySales(sh, srvSales) {
     const box = $('#mysales'); if (!box) return;
     const q = S.queue.filter(o => o.action === 'sale.create' && o.userId === S.user.id && o.data.business === sh.business)
       .map(o => ({ id: o.data.id, ts: o.ts, local: 1, method: o.data.method, items: o.data.items, total: A.roundStep(o.data.items.reduce((a, it) => a + num((findProd(it.productId) || {}).price) * num(it.qty), 0) - num(o.data.discount)) }));
-    const hit = A.cacheGet('sales.list', { business: sh.business, from: String(sh.openTs).slice(0, 10), to: A.today() });
-    const srv = ((hit && hit.sales) || []).filter(s => s.shiftId === sh.id && s.userId === S.user.id);
+    const srv = (srvSales || []).filter(s => s.userId === S.user.id);
     const list = q.reverse().concat(srv.filter(s => !q.some(x => x.id === s.id)));
     const gone = s => s.status === 'undone' || s.status === 'void';
     box.innerHTML = list.length ? `<h3>${esc(t('Sales in my shift'))}</h3><div class="list">${list.slice(0, 40).map(s => `<div class="li" style="${gone(s) ? 'opacity:.55' : ''}"><div class="main">
@@ -386,7 +403,6 @@
       <div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' ×' + fmt(i.qty)).join(', ')} · ${esc(A.methodName(s.method))}${s.local ? ' · ' + esc(t('Waiting to send')) : ''}${gone(s) ? ' · ' + esc(t('Undone')) : ''}</div></div>
       ${!gone(s) && can('undoSales') ? `<button class="btn sm ghost" data-undo="${esc(s.id)}">${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div>`).join('')}</div>` : '';
     $$('[data-undo]', box).forEach(b => b.onclick = () => undoSheet(list.find(s => s.id === b.dataset.undo), () => loadLive(sh)));
-    if (S.online) A.cachedCall('sales.list', { business: sh.business, from: String(sh.openTs).slice(0, 10), to: A.today() }, () => { if ($('#mysales') && !document.querySelector('.ov')) { const y = window.scrollY; drawMySales(sh); window.scrollTo(0, y); } }).catch(() => {});
   }
   function undoSheet(s, done) {
     const reasons = ['Wrong item', 'Wrong price', 'Customer changed mind', 'Wrong payment'];
@@ -1546,7 +1562,10 @@
     $$('[data-retry]').forEach(b => b.onclick = () => { const o = S.failed.splice(b.dataset.retry, 1)[0]; delete o.error; S.queue.push(o); A.LS.set('failed', S.failed); A.LS.set('queue', S.queue); A.syncNow().then(() => A.render()); });
     $$('[data-drop]').forEach(b => b.onclick = async () => { if (await confirmBox(t('Remove this item? It will not be saved.'), t('Remove'), 'red')) { S.failed.splice(b.dataset.drop, 1); A.LS.set('failed', S.failed); A.updateTop(); A.render(); } });
   };
-  Screens.onSync = function () { if (S.route === 'sync' && !document.querySelector('.ov')) A.render(); };
+  Screens.onSync = function () {
+    if (S.route === 'sync' && !document.querySelector('.ov')) A.render();
+    if (S.route === 'shift' && $('#cmp')) { const sh = myShift(); if (sh) loadLive(sh, true); }
+  };
   Screens.pin = function (main) {
     main.innerHTML = `<div class="card"><form id="f">${input('oldPin', t('Current PIN'), '', 'type="password" inputmode="numeric" autocomplete="off"')}
       ${input('newPin', t('New PIN (4–6 digits)'), '', 'type="password" inputmode="numeric" autocomplete="off"')}${input('newPin2', t('New PIN again'), '', 'type="password" inputmode="numeric" autocomplete="off"')}

@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.2.0';
+var VERSION = '1.2.1';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -113,7 +113,7 @@ function out_(o) {
 }
 
 var PUBLIC = { ping: 1, names: 1, login: 1 };
-var READS = { boot: 1, 'po.list': 1, insights: 1, 'recip.list': 1, 'recip.mine': 1, 'admin.counts': 1, 'admin.archivePreview': 1, report: 1, 'sales.list': 1, 'cust.ledger': 1, 'sup.ledger': 1, 'refund.list': 1, 'users.list': 1, 'audit.list': 1,
+var READS = { 'shift.live': 1, 'shift.preview': 1, boot: 1, 'po.list': 1, insights: 1, 'recip.list': 1, 'recip.mine': 1, 'admin.counts': 1, 'admin.archivePreview': 1, report: 1, 'sales.list': 1, 'cust.ledger': 1, 'sup.ledger': 1, 'refund.list': 1, 'users.list': 1, 'audit.list': 1,
               'export': 1, 'shift.list': 1, 'ing.log': 1, 'exp.list': 1, 'stock.log': 1, logout: 1 };
 
 function handle_(req) {
@@ -183,6 +183,32 @@ function table_(name) {
   return T_[name];
 }
 
+// Rows dated on or after `since`, read from the bottom of the tab only (new rows are always added at the bottom).
+// Much faster than reading a whole tab that has months of history. Falls back to the full tab when it is already loaded.
+function recent_(name, since) {
+  var key = '~' + name + '|' + since;
+  if (T_[key]) return T_[key];
+  if (T_[name]) return (T_[key] = T_[name].rows.filter(function (r) { return String(r.date) >= since; }));
+  var sh = ss_().getSheetByName(name);
+  if (!sh) throw new Error('Missing tab "' + name + '". Run setup() in Apps Script.');
+  var headers = SCHEMA[name], di = headers.indexOf('date'), last = sh.getLastRow(), stop = addDaysIso_(since, -3);
+  var n = 400, vals = [];
+  while (last > 1) {
+    var start = Math.max(2, last - n + 1);
+    vals = sh.getRange(start, 1, last - start + 1, headers.length).getValues();
+    if (start === 2 || String(norm_(vals[0][di])).slice(0, 10) < stop) break;
+    n *= 4;
+  }
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) {
+    var o = {};
+    for (var j = 0; j < headers.length; j++) o[headers[j]] = norm_(vals[i][j]);
+    if (o[headers[0]] === '' && o[headers[1]] === '') continue;
+    if (String(o.date).slice(0, 10) >= since) rows.push(o);
+  }
+  return (T_[key] = rows);
+}
+
 function norm_(v) {
   if (v instanceof Date) {
     var h = v.getHours() + v.getMinutes() + v.getSeconds();
@@ -202,20 +228,36 @@ function cellVal_(v) {
 
 function rowArr_(t, o) { return t.headers.map(function (h) { return cellVal_(o[h]); }); }
 
+// Adding rows never reads the whole tab (that is what made saving slow on a big Sheet).
+function appendTab_(name) {
+  if (T_[name]) return T_[name];
+  var sh = ss_().getSheetByName(name);
+  if (!sh) throw new Error('Missing tab "' + name + '". Run setup() in Apps Script.');
+  return { sh: sh, headers: SCHEMA[name], rows: null };
+}
+function afterInsert_(name, list) {
+  if (T_[name]) list.forEach(function (o) { T_[name].rows.push(o); });
+  Object.keys(T_).forEach(function (k) {
+    if (k.indexOf('~' + name + '|') !== 0) return;
+    var since = k.split('|')[1];
+    list.forEach(function (o) { if (String(o.date || '').slice(0, 10) >= since) T_[k].push(o); });
+  });
+}
 function insert_(name, o) {
-  var t = table_(name);
+  var t = appendTab_(name);
   var r = t.sh.getLastRow() + 1;
   t.sh.getRange(r, 1, 1, t.headers.length).setValues([rowArr_(t, o)]);
-  o._r = r; t.rows.push(o);
+  o._r = r; afterInsert_(name, [o]);
   return o;
 }
 
 function insertMany_(name, list) {
   if (!list.length) return;
-  var t = table_(name);
+  var t = appendTab_(name);
   var r = t.sh.getLastRow() + 1;
   t.sh.getRange(r, 1, list.length, t.headers.length).setValues(list.map(function (o) { return rowArr_(t, o); }));
-  list.forEach(function (o, i) { o._r = r + i; t.rows.push(o); });
+  list.forEach(function (o, i) { o._r = r + i; });
+  afterInsert_(name, list);
 }
 
 function update_(name, o) {
@@ -403,7 +445,8 @@ var ACTIONS = {
   'sale.create': function (u, d) {
     var id = str_(d.id, 60);
     if (!id) throw new Error('Missing sale id');
-    var dup = find_('Sales', id);
+    var d0 = dateOf_(clientTs_(d.ts)), t2 = addDaysIso_(today_(), -2);
+    var dup = recent_('Sales', addDaysIso_(d0 < t2 ? d0 : t2, -1)).filter(function (x) { return x.id === id; })[0];
     if (dup) return { ok: true, dup: true, sale: clean_(dup) };
     var biz = d.business; needBiz_(u, biz);
     var ts = clientTs_(d.ts);
@@ -474,11 +517,11 @@ var ACTIONS = {
     var biz = bizFilter_(u, d.business);
     var from = d.from || today_(), to = d.to || today_();
     var mine = !can_(u, 'viewReports');
-    var sales = table_('Sales').rows.filter(function (s) {
+    var sales = recent_('Sales', from).filter(function (s) {
       return biz.indexOf(s.business) >= 0 && s.date >= from && s.date <= to && (!mine || s.userId === u.id);
     });
     var ids = {}; sales.forEach(function (s) { ids[s.id] = []; });
-    table_('SaleItems').rows.forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push(clean_(i)); });
+    recent_('SaleItems', from).forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push(clean_(i)); });
     return { ok: true, sales: sales.slice(-300).reverse().map(function (s) { var c = clean_(s); c.items = ids[s.id]; if (!can_(u, 'viewProfit')) delete c.cost; return c; }) };
   },
 
@@ -500,6 +543,21 @@ var ACTIONS = {
     if (s.userId !== u.id && !isOwner_(u)) throw new Error('NOPERM: not your shift');
     var moves = table_('CashMoves').rows.filter(function (m) { return m.shiftId === s.id; }).map(clean_);
     return { ok: true, totals: shiftTotals_(s), moves: moves, shift: clean_(s) };
+  },
+
+  // Everything the Shift screen needs in ONE quick read: totals, cash taken out, and the sales of this shift.
+  'shift.live': function (u, d) {
+    var s = find_('Shifts', d.id); if (!s) throw new Error('Shift not found');
+    if (s.userId !== u.id && !isOwner_(u)) throw new Error('NOPERM: not your shift');
+    var since = String(s.date || dateOf_(s.openTs)).slice(0, 10);
+    var moves = recent_('CashMoves', since).filter(function (m) { return m.shiftId === s.id; }).map(clean_);
+    var sales = recent_('Sales', since).filter(function (x) { return x.shiftId === s.id; });
+    var ids = {}; sales.forEach(function (x) { ids[x.id] = []; });
+    recent_('SaleItems', since).forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push({ productId: i.productId, name: i.name, qty: i.qty }); });
+    var list = sales.slice(-60).reverse().map(function (x) {
+      return { id: x.id, ts: x.ts, method: x.method, total: x.total, status: x.status, customerName: x.customerName, userId: x.userId, items: ids[x.id] };
+    });
+    return { ok: true, totals: shiftTotals_(s), moves: moves, shift: clean_(s), sales: list };
   },
 
   'shift.close': function (u, d) {
@@ -1282,7 +1340,8 @@ function shiftTotals_(s) {
   var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0,
             cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, undoneCount: 0 };
   var key = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }, inKey = { cash: 'cash', zaad: 'zaad', edahab: 'ed' };
-  table_('Sales').rows.forEach(function (x) {
+  var since = String(s.date || dateOf_(s.openTs)).slice(0, 10);
+  recent_('Sales', since).forEach(function (x) {
     if (x.shiftId !== s.id) return;
     if (GONE[x.status]) { t.undoneCount++; return; }
     t.saleCount++;
@@ -1291,10 +1350,10 @@ function shiftTotals_(s) {
     var m = saleMoney_(x), k = inKey[x.method];
     t[k + 'InSH'] += m.sh; t[k + 'InUSD'] += m.usd;
   });
-  table_('CustLedger').rows.forEach(function (x) { if (x.shiftId === s.id && x.type === 'payment' && key[x.method]) t['custPay' + key[x.method]] += num_(x.amount); });
-  table_('Expenses').rows.forEach(function (x) { if (x.shiftId === s.id && key[x.method]) t['exp' + key[x.method]] += num_(x.amount); });
-  table_('Refunds').rows.forEach(function (x) { if (x.shiftId === s.id && x.status === 'approved' && key[x.method]) t['ref' + key[x.method]] += num_(x.amount); });
-  table_('CashMoves').rows.forEach(function (x) { if (x.shiftId === s.id) t[x.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num_(x.amount); });
+  recent_('CustLedger', since).forEach(function (x) { if (x.shiftId === s.id && x.type === 'payment' && key[x.method]) t['custPay' + key[x.method]] += num_(x.amount); });
+  recent_('Expenses', since).forEach(function (x) { if (x.shiftId === s.id && key[x.method]) t['exp' + key[x.method]] += num_(x.amount); });
+  recent_('Refunds', since).forEach(function (x) { if (x.shiftId === s.id && x.status === 'approved' && key[x.method]) t['ref' + key[x.method]] += num_(x.amount); });
+  recent_('CashMoves', since).forEach(function (x) { if (x.shiftId === s.id) t[x.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num_(x.amount); });
   var rate = num_(s.rate) || rate_(), r2 = function (v) { return Math.round(v * 100) / 100; };
   t.eCashSH = num_(s.openCash) + t.cashInSH + t.custPayCash - t.expCash - t.refCash - t.cashOutSH;
   t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD);
@@ -1491,17 +1550,18 @@ function emergencyResetOwnerPin() {
 /* ============================== v1.2 helpers: owner tools, shift times, insights, emails, reset, archive ============================== */
 
 function needOwner_(u) { if (!isOwner_(u)) throw new Error('NOPERM: owners only'); }
-function deleteRow_(name, o) { table_(name).sh.deleteRow(o._r); T_[name] = null; }
+function forget_(name) { T_[name] = null; Object.keys(T_).forEach(function (k) { if (k.indexOf('~' + name + '|') === 0) delete T_[k]; }); }
+function deleteRow_(name, o) { table_(name).sh.deleteRow(o._r); forget_(name); }
 function clear_(name) {
   var t = table_(name), last = t.sh.getLastRow();
   if (last > 1) t.sh.getRange(2, 1, last - 1, t.headers.length).clearContent();
-  T_[name] = null;
+  forget_(name);
 }
 function rewrite_(name, rows) {
   var t = table_(name), last = t.sh.getLastRow();
   if (last > 1) t.sh.getRange(2, 1, last - 1, t.headers.length).clearContent();
   if (rows.length) t.sh.getRange(2, 1, rows.length, t.headers.length).setValues(rows.map(function (o) { return rowArr_(t, o); }));
-  T_[name] = null;
+  forget_(name);
 }
 function setSetting_(k, v) {
   var row = table_('Settings').rows.filter(function (r) { return r.key === k; })[0];
