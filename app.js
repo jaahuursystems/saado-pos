@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -59,6 +59,31 @@
   const setting = k => S.data ? S.data.settings[k] : '';
   const prods = (b) => (S.data ? S.data.products : []).filter(p => p.business === (b || S.biz) && String(p.active) !== '0');
   const findProd = id => (S.data ? S.data.products : []).find(p => p.id === id);
+  /* Selling loose (pieces) — the same rules as the server (Code.gs). Stock of a loose item is kept in pieces; price/cost are per packet. */
+  const isLoose = p => !!p && p.business === 'shop' && (p.loose === 1 || p.loose === '1' || p.loose === true) && num(p.perPack) > 1;
+  function looseTable(p) {
+    let tb = []; try { tb = typeof p.looseTable === 'string' ? JSON.parse(p.looseTable || '[]') : (p.looseTable || []); } catch (e) {}
+    return (Array.isArray(tb) ? tb : []).map(r => [Math.floor(num(r[0])), num(r[1])]).filter(r => r[0] > 0 && r[1] > 0 && r[0] < num(p.perPack)).sort((a, b) => a[0] - b[0]);
+  }
+  function loosePrice(p, n) {   // whole packets at the packet price; the rest from the price list, added up from the biggest rows; never more than a packet
+    const per = num(p.perPack), pack = num(p.price), tb = looseTable(p);
+    let total = Math.floor(n / per) * pack; const rest = n % per;
+    if (!rest) return total;
+    const exact = tb.find(r => r[0] === rest); let part = 0;
+    if (exact) part = exact[1];
+    else { let left = rest; const desc = tb.slice().reverse(); while (left > 0) { const r = desc.find(x => x[0] <= left); if (!r) { part += Math.round(pack / per * left); break; } part += r[1]; left -= r[0]; } }
+    return total + Math.min(part, pack);
+  }
+  function stockTxt(p, n) {   // "4 pk + 7 pcs"
+    n = n === undefined ? num(p.stock) : num(n);
+    if (!isLoose(p)) return fmt(n);
+    const per = num(p.perPack), a = Math.abs(n), pk = Math.floor(a / per), pc = a % per;
+    return (n < 0 ? '−' : '') + (pk ? pk + ' ' + t('pk') : '') + (pk && pc ? ' + ' : '') + (pc || !pk ? pc + ' ' + t('pcs') : '');
+  }
+  const lowAt = p => isLoose(p) ? num(p.lowStock) * num(p.perPack) : num(p.lowStock);
+  const isLow = p => num(p.stock) <= lowAt(p);
+  const piecesOf = (p, qty, unit) => isLoose(p) ? (unit === 'pc' ? num(qty) : num(qty) * num(p.perPack)) : num(qty);
+  function lineTotal(l) { const p = findProd(l.productId); return l.unit === 'pc' && p && isLoose(p) ? loosePrice(p, l.qty) : num(l.price) * num(l.qty); }
   const myShift = (b) => (S.data ? S.data.shifts : []).find(s => s.status === 'open' && s.business === (b || S.biz) && s.userId === S.user.id);
 
   /* ---------------- server calls ---------------- */
@@ -876,6 +901,7 @@
 
   window.App = {
     S, LS, CFG, APP_VERSION, t, esc, num, fmt, money, usd, rate, roundStep, uid, today, addDays, when, localParts, bizName, methodName,
+    isLoose, looseTable, loosePrice, stockTxt, lowAt, isLow, piecesOf, lineTotal,
     icon, installApp, isStandalone, rememberPin, foodOn, cachedCall, cacheGet, cachePut, prefetch, softRender, isOwner, can, myBiz, setting, prods, findProd, myShift, api, enqueue, syncNow, refresh, upsert, saveData, logout, friendly,
     toast, sheet, confirmBox, alertBox, withBusy, formData, seg, input, moneyInput, beep, go, render, drawShell, updateTop,
     startCamera, stopCamera, scanOnce, toCSV, download, parseCSV, readXLSX, makeDocPDF, shareFile, openWhatsApp, start

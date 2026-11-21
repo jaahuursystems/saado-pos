@@ -54,8 +54,16 @@
     v = v.toLowerCase();
     return prods().filter(p => String(p.name).toLowerCase().includes(v) || (p.barcode && String(p.barcode).startsWith(v)) || String(p.category || '').toLowerCase().includes(v));
   }
-  function inCart(id) { const l = S.cart.find(x => x.productId === id); return l ? l.qty : 0; }
-  function stockTxt(p) { return S.biz === 'shop' && can('viewStock') ? ` · ${t('Stock')}: ${fmt(p.stock)}` : ''; }
+  function inCart(id) { return S.cart.filter(x => x.productId === id).reduce((a, l) => a + (l.unit === 'pc' ? 0 : l.qty), 0); }
+  // badge on a tile: "2", "3 pcs" or "1+3 pcs"
+  function inCartTxt(id) {
+    const pk = inCart(id), pc = S.cart.filter(x => x.productId === id && x.unit === 'pc').reduce((a, l) => a + l.qty, 0);
+    return pc ? (pk ? pk + '+' : '') + pc + ' ' + t('pcs') : pk ? String(pk) : '';
+  }
+  const piecesInCart = id => { const p = findProd(id); return S.cart.filter(x => x.productId === id).reduce((a, l) => a + A.piecesOf(p, l.qty, l.unit), 0); };
+  function stockTxt(p) { return S.biz === 'shop' && can('viewStock') ? ` · ${t('Stock')}: ${A.stockTxt(p)}` : ''; }
+  const soldTxt = i => (num(i.qty) ? '×' + fmt(i.qty) : '') + (num(i.pcs) ? (num(i.qty) ? ' + ' : '') + fmt(i.pcs) + ' ' + t('pcs') : '');
+  const looseTag = p => A.isLoose(p) ? ` <span class="lz">${esc(t('LOOSE'))}</span>` : '';
   function drawResults() {
     const box = $('#results'); if (!box) return;
     const v = ($('#q') || {}).value ? $('#q').value.trim() : '';
@@ -72,33 +80,65 @@
         .sort((a, b) => (num(b.fav) - num(a.fav)) || (num(b.sold) - num(a.sold)) || String(a.name).localeCompare(b.name));
       const showStock = S.biz === 'shop' && can('viewStock');
       box.innerHTML = (cats.length ? `<div class="chips scroll" id="cats" style="margin-bottom:10px"><button class="chip ${!S.sellCat ? 'on' : ''}" data-c="">${esc(t('All'))} ${all.length}</button>${cats.map(c => `<button class="chip ${S.sellCat === c ? 'on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : '') +
-        `<div class="tiles">${list.slice(0, 400).map(p => { const low = S.biz === 'shop' && num(p.stock) <= num(p.lowStock); return `<button class="tile ${low ? 'low' : ''}" data-id="${esc(p.id)}">
-          <span class="n">${esc(p.name)}</span><span><span class="p">${fmt(p.price)}</span>${showStock ? `<br><span class="s ${low ? 'low' : ''}">${esc(t('Stock'))} ${fmt(p.stock)}</span>` : ''}</span>${inCart(p.id) ? `<span class="q">${inCart(p.id)}</span>` : ''}</button>`; }).join('')}</div>` +
+        `<div class="tiles">${list.slice(0, 400).map(p => { const low = S.biz === 'shop' && A.isLow(p), q = inCartTxt(p.id); return `<button class="tile ${low ? 'low' : ''}" data-id="${esc(p.id)}">
+          <span class="n">${esc(p.name)}${looseTag(p)}</span><span><span class="p">${fmt(p.price)}</span>${showStock ? `<br><span class="s ${low ? 'low' : ''}">${esc(t('Stock'))} ${esc(A.stockTxt(p))}</span>` : ''}</span>${q ? `<span class="q">${esc(q)}</span>` : ''}</button>`; }).join('')}</div>` +
         (list.length > 400 ? `<p class="small muted center">${esc(t('Search to find more products.'))}</p>` : '');
-      $$('.tile', box).forEach(b => b.onclick = () => { addToCart(findProd(b.dataset.id)); });
+      $$('.tile', box).forEach(b => b.onclick = () => { pick(findProd(b.dataset.id)); });
       $$('#cats .chip', box).forEach(c => c.onclick = () => { S.sellCat = c.dataset.c; drawResults(); });
       return;
     }
     const list = matches(v).slice(0, 50);
-    box.innerHTML = list.length ? `<div class="list">${list.map(p => `<div class="li tap" data-id="${esc(p.id)}"><div class="main"><div class="name">${esc(p.name)}</div>
-        <div class="sub">${esc(p.barcode || '')}${esc(stockTxt(p))}</div></div><b>${fmt(p.price)}</b>${inCart(p.id) ? `<span class="pill gold">×${inCart(p.id)}</span>` : ''}</div>`).join('')}</div>`
+    box.innerHTML = list.length ? `<div class="list">${list.map(p => `<div class="li tap" data-id="${esc(p.id)}"><div class="main"><div class="name">${esc(p.name)}${looseTag(p)}</div>
+        <div class="sub">${esc(p.barcode || '')}${esc(stockTxt(p))}</div></div><b>${fmt(p.price)}</b>${inCartTxt(p.id) ? `<span class="pill gold">×${esc(inCartTxt(p.id))}</span>` : ''}</div>`).join('')}</div>`
       : `<div class="card empty">${esc(t('Nothing found'))}</div>`;
-    $$('.li', box).forEach(r => r.onclick = () => { addToCart(findProd(r.dataset.id)); $('#q').value = ''; drawResults(); });
+    $$('.li', box).forEach(r => r.onclick = () => { $('#q').value = ''; pick(findProd(r.dataset.id)); drawResults(); });
   }
-  function addToCart(p, qty) {
+  // A tap on a product: loose items ask "packet or pieces"; everything else goes straight into the cart.
+  function pick(p) { if (A.isLoose(p)) looseSheet(p); else addToCart(p); }
+  function looseSheet(p) {
+    const tb = A.looseTable(p), per = num(p.perPack);
+    let n = (tb[0] || [1])[0];
+    const sh = sheet({ title: p.name, body: `
+      <button type="button" class="pk" id="pkBtn"><span class="av">${I('box')}</span><span class="grow"><b>${esc(t('1 packet ({n} pcs)', { n: per }))}</b>${can('viewStock') ? `<span class="small">${esc(t('Stock'))}: ${esc(A.stockTxt(p))}</span>` : ''}</span><b>${fmt(p.price)}</b></button>
+      <div class="small muted" style="margin:0 2px 8px;font-weight:700;letter-spacing:.05em">${esc(t('OR PIECES'))}</div>
+      ${tb.length ? `<div class="qgrid">${tb.map(r => `<button type="button" class="qb" data-n="${r[0]}"><b>${r[0]}</b><span>${fmt(r[1])}</span></button>`).join('')}</div>` : ''}
+      <div class="row" style="align-items:center;margin-top:14px"><span class="grow small muted">${esc(t('Other number of pieces'))}</span><div class="step"><button type="button" data-d="-1">−</button><input id="lzn" inputmode="numeric" value="${n}"><button type="button" data-d="1">+</button></div></div>
+      <div class="totalbox" style="margin-top:14px;padding:12px"><div class="u" id="lzu"></div><div class="t" id="lzt" style="font-size:28px"></div></div>`,
+      actions: [{ label: t('Cancel') }, { label: t('Add to cart'), cls: 'gold', icon: 'cart', onClick: c => {
+        if (!(n > 0)) throw new Error(t('Enter a number'));
+        addToCart(p, n, 'pc'); c();
+      } }],
+      onOpen: (el, close) => {
+        const upd = () => {
+          n = Math.max(0, Math.floor(num($('#lzn', el).value)));
+          $$('.qb', el).forEach(b => b.classList.toggle('on', num(b.dataset.n) === n));
+          $('#lzu', el).textContent = n >= per ? t('{n} pieces ({p})', { n, p: A.stockTxt(p, n) }) : t('{n} pieces', { n });
+          $('#lzt', el).textContent = n > 0 ? money(A.loosePrice(p, n)) : '—';
+        };
+        $$('.qb', el).forEach(b => b.onclick = () => { $('#lzn', el).value = b.dataset.n; upd(); });
+        $$('.step button', el).forEach(b => b.onclick = () => { $('#lzn', el).value = Math.max(1, num($('#lzn', el).value) + num(b.dataset.d)); upd(); });
+        $('#lzn', el).oninput = upd;
+        $('#pkBtn', el).onclick = () => { addToCart(p, 1); close(); };
+        upd();
+      } });
+    return sh;
+  }
+  function addToCart(p, qty, unit) {
     if (!p) return;
-    const l = S.cart.find(x => x.productId === p.id);
-    if (l) l.qty += qty || 1; else S.cart.push({ productId: p.id, name: p.name, price: num(p.price), qty: qty || 1 });
+    unit = unit === 'pc' && A.isLoose(p) ? 'pc' : '';
+    const l = S.cart.find(x => x.productId === p.id && (x.unit || '') === unit);
+    if (l) l.qty += qty || 1; else S.cart.push({ productId: p.id, name: p.name, price: num(p.price), qty: qty || 1, unit });
     A.beep();
-    if (S.biz === 'shop' && num(p.stock) - inCart(p.id) < 0) toast(t('Warning: {x} shows no stock left', { x: p.name }), 'warn');
+    if (S.biz === 'shop' && num(p.stock) - piecesInCart(p.id) < 0) toast(t('Warning: {x} shows no stock left', { x: p.name }), 'warn');
     drawCartBar(); if (S.route === 'sell') drawResults();
     return inCart(p.id);
   }
   function cartTotals(discount) {
-    const sub = S.cart.reduce((a, l) => a + l.price * l.qty, 0);
+    const sub = S.cart.reduce((a, l) => a + A.lineTotal(l), 0);
     const d = Math.min(num(discount), sub);
-    return { sub, discount: d, total: A.roundStep(sub - d), count: S.cart.reduce((a, l) => a + l.qty, 0) };
+    return { sub, discount: d, total: A.roundStep(sub - d), count: S.cart.reduce((a, l) => a + (l.unit === 'pc' ? 1 : l.qty), 0) };
   }
+  const lineName = l => esc(l.name) + (l.unit === 'pc' ? ` <span class="lz">${esc(t('{n} PCS', { n: l.qty }))}</span>` : A.isLoose(findProd(l.productId)) ? ` <span class="lz pkt">${esc(t('PACKET'))}</span>` : '');
   function drawCartBar() {
     document.querySelectorAll('.cartbar').forEach(x => x.remove());
     if (S.route !== 'sell' || !S.cart.length) return;
@@ -122,7 +162,7 @@
     const draw = () => {
       const box = $('#cl', sh.el); const tt = cartTotals(0);
       if (!S.cart.length) { sh.close(); drawCartBar(); drawResults(); return; }
-      box.innerHTML = `<div class="list">${S.cart.map((l, i) => `<div class="li"><div class="main"><div class="name">${esc(l.name)}</div><div class="sub">${fmt(l.price)} × ${l.qty} = <b>${fmt(l.price * l.qty)}</b></div></div>
+      box.innerHTML = `<div class="list">${S.cart.map((l, i) => `<div class="li"><div class="main"><div class="name">${lineName(l)}</div><div class="sub">${l.unit === 'pc' ? esc(t('loose price for {n}', { n: l.qty })) + ` = <b>${fmt(A.lineTotal(l))}</b>` : `${fmt(l.price)} × ${l.qty} = <b>${fmt(A.lineTotal(l))}</b>`}</div></div>
         <div class="qty"><button data-i="${i}" data-d="-1">−</button><b>${l.qty}</b><button data-i="${i}" data-d="1">+</button></div></div>`).join('')}</div>
         <div class="row"><span class="grow muted">${esc(t('Subtotal'))}</span><b>${money(tt.sub)}</b></div><div class="row"><span class="grow muted">${esc(t('To pay (rounded)'))}</span><b class="big">${money(tt.total)}</b></div>`;
       $$('.qty button', box).forEach(b => b.onclick = () => { const l = S.cart[b.dataset.i]; l.qty += num(b.dataset.d); if (l.qty <= 0) S.cart.splice(b.dataset.i, 1); draw(); drawCartBar(); drawResults(); });
@@ -243,10 +283,10 @@
       const data = { id: A.uid('S'), business: biz, method: st.method, discount: tt.discount, tendered: st.method === 'cash' ? num(st.tendered) : 0, tenderCur: st.cur,
         payCur: st.method === 'zaad' || st.method === 'edahab' ? st.payCur : 'SH',
         customerId: st.method === 'credit' ? st.customerId : '', orderType: biz === 'food' ? st.orderType : '', ts: new Date().toISOString(),
-        items: S.cart.map(l => ({ productId: l.productId, qty: l.qty, name: l.name })) };
+        items: S.cart.map(l => ({ productId: l.productId, qty: l.qty, name: l.name, unit: l.unit || '' })) };
       enqueue('sale.create', data);
       // update this phone right away (the server checks again)
-      S.cart.forEach(l => { const p = findProd(l.productId); if (p) { if (biz === 'shop') p.stock = num(p.stock) - l.qty; p.sold = num(p.sold) + l.qty; } });
+      S.cart.forEach(l => { const p = findProd(l.productId); if (p) { const pcs = A.piecesOf(p, l.qty, l.unit); if (biz === 'shop') p.stock = num(p.stock) - pcs; p.sold = num(p.sold) + (A.isLoose(p) ? pcs / num(p.perPack) : l.qty); } });
       if (st.method === 'credit') { const c = S.data.customers.find(x => x.id === st.customerId); if (c) c.balance = num(c.balance) + tt.total; }
       A.saveData();
       S.cart = []; close(); drawCartBar(); drawResults();
@@ -266,7 +306,7 @@
     S.queue.forEach(o => {
       if (!o.data || o.data.business && o.data.business !== sh.business) return;
       if (o.action === 'sale.create' && o.userId === S.user.id) {
-        const d = o.data, sub = d.items.reduce((a, it) => { const p = findProd(it.productId); return a + (p ? num(p.price) : 0) * num(it.qty); }, 0);
+        const d = o.data, sub = d.items.reduce((a, it) => { const p = findProd(it.productId); return a + (p ? A.lineTotal(Object.assign({ price: p.price }, it)) : 0); }, 0);
         const tot = A.roundStep(sub - num(d.discount)); x.saleCount++; waiting++;
         if (d.method === 'credit') { x.creditSales += tot; return; }
         x[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[d.method]] += tot;
@@ -395,13 +435,13 @@
   function drawMySales(sh, srvSales) {
     const box = $('#mysales'); if (!box) return;
     const q = S.queue.filter(o => o.action === 'sale.create' && o.userId === S.user.id && o.data.business === sh.business)
-      .map(o => ({ id: o.data.id, ts: o.ts, local: 1, method: o.data.method, items: o.data.items, total: A.roundStep(o.data.items.reduce((a, it) => a + num((findProd(it.productId) || {}).price) * num(it.qty), 0) - num(o.data.discount)) }));
+      .map(o => ({ id: o.data.id, ts: o.ts, local: 1, method: o.data.method, items: o.data.items, total: A.roundStep(o.data.items.reduce((a, it) => a + (findProd(it.productId) ? A.lineTotal(Object.assign({ price: findProd(it.productId).price }, it)) : 0), 0) - num(o.data.discount)) }));
     const srv = (srvSales || []).filter(s => s.userId === S.user.id);
     const list = q.reverse().concat(srv.filter(s => !q.some(x => x.id === s.id)));
     const gone = s => s.status === 'undone' || s.status === 'void';
     box.innerHTML = list.length ? `<h3>${esc(t('Sales in my shift'))}</h3><div class="list">${list.slice(0, 40).map(s => `<div class="li" style="${gone(s) ? 'opacity:.55' : ''}"><div class="main">
       <div class="name" style="${gone(s) ? 'text-decoration:line-through' : ''}">${s.local ? esc(t('now')) : String(s.ts).slice(11, 16)} · ${money(s.total)}</div>
-      <div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' ×' + fmt(i.qty)).join(', ')} · ${esc(A.methodName(s.method))}${s.local ? ' · ' + esc(t('Waiting to send')) : ''}${gone(s) ? ' · ' + esc(t('Undone')) : ''}</div></div>
+      <div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + (i.unit === 'pc' ? ' · ' + fmt(i.qty) + ' ' + t('pcs') : ' ×' + fmt(i.qty))).join(', ')} · ${esc(A.methodName(s.method))}${s.local ? ' · ' + esc(t('Waiting to send')) : ''}${gone(s) ? ' · ' + esc(t('Undone')) : ''}</div></div>
       ${!gone(s) && can('undoSales') ? `<button class="btn sm ghost" data-undo="${esc(s.id)}">${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div>`).join('')}</div>` : '';
     $$('[data-undo]', box).forEach(b => b.onclick = () => undoSheet(list.find(s => s.id === b.dataset.undo), () => loadLive(sh)));
   }
@@ -409,7 +449,7 @@
     const reasons = ['Wrong item', 'Wrong price', 'Customer changed mind', 'Wrong payment'];
     let reason = '';
     const sh = sheet({ title: t('Undo sale {t}?', { t: s.local ? t('now') : String(s.ts).slice(11, 16) }), body: `<div class="totalbox" style="padding:12px"><div class="u">${esc(A.methodName(s.method))}</div><div class="t" style="font-size:28px">${money(s.total)}</div></div>
-      <div class="list"><div class="li lead"><span class="av green" style="width:34px;height:34px">${I('box', 'sm')}</span><div class="main"><div class="name">${esc(t('Stock goes back'))}</div><div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' +' + fmt(i.qty)).join(' · ')}</div></div></div>
+      <div class="list"><div class="li lead"><span class="av green" style="width:34px;height:34px">${I('box', 'sm')}</span><div class="main"><div class="name">${esc(t('Stock goes back'))}</div><div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' +' + fmt(i.qty) + (i.unit === 'pc' ? ' ' + t('pcs') : '')).join(' · ')}</div></div></div>
       <div class="li lead"><span class="av" style="width:34px;height:34px">${I('cash', 'sm')}</span><div class="main"><div class="name">${esc(s.method === 'credit' ? t('Customer debt goes down') : t('Expected money goes down'))}</div><div class="sub">${esc(s.method === 'credit' ? '' : t('Give the money back to the customer'))}</div></div></div></div>
       <label class="f"><span>${esc(t('Reason (required)'))}</span><div class="chips" id="rs">${reasons.map(r => `<button class="chip" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
       <p class="small muted">${esc(t('Only sales in your own open shift. The owner sees every undo.'))}</p>`,
@@ -418,7 +458,7 @@
         const qi = S.queue.findIndex(o => o.action === 'sale.create' && o.data.id === s.id);
         if (qi >= 0) {   // not sent yet: simply remove it from this phone
           const op = S.queue.splice(qi, 1)[0]; A.LS.set('queue', S.queue);
-          op.data.items.forEach(it => { const p = findProd(it.productId); if (p) { if (op.data.business === 'shop') p.stock = num(p.stock) + num(it.qty); p.sold = Math.max(0, num(p.sold) - num(it.qty)); } });
+          op.data.items.forEach(it => { const p = findProd(it.productId); if (p) { const pcs = A.piecesOf(p, it.qty, it.unit); if (op.data.business === 'shop') p.stock = num(p.stock) + pcs; p.sold = Math.max(0, num(p.sold) - (A.isLoose(p) ? pcs / num(p.perPack) : num(it.qty))); } });
           if (op.data.method === 'credit') { const c = S.data.customers.find(x => x.id === op.data.customerId); if (c) c.balance = num(c.balance) - s.total; }
           A.saveData(); A.updateTop();
         } else {
@@ -696,7 +736,7 @@
           <div class="sub" style="white-space:normal">${esc(t('Expected now'))}: ${esc(t('Cash'))} ${fmt(o.expectedCash)} · Zaad ${fmt(o.expectedZaad)} · Edahab ${fmt(o.expectedEd)}</div></div><span class="pill green">${esc(t('Open'))}</span></div>`).join('')}
         ${b.last ? `<div class="li lead"><span class="av gray">${I('lock')}</span><div class="main"><div class="name">${esc(A.bizName(b.business))} · ${esc(t('last closed'))} ${A.when(b.last.closeTs)}</div>
           <div class="sub" style="white-space:normal">${esc(b.last.userName)} · ${esc(t('Cash'))} ${fmt(b.last.cash)} · Zaad ${fmt(b.last.zaad)} · Edahab ${fmt(b.last.edahab)}</div></div>${diffTxt(b.last.diffCash)}</div>` : ''}`).join('') || `<div class="empty">${I('clock')}${esc(t('No shifts'))}</div>`}</div>
-      <div class="grid2"><div><h3>${esc(t('Best sellers'))}</h3><div class="list">${r.topItems.slice(0, 5).map((i, n) => `<div class="li"><span class="av gold" style="width:28px;height:28px;border-radius:9px;font-size:13px">${n + 1}</span><div class="main name">${esc(i.name)}</div><span class="muted small">×${fmt(i.qty)}</span></div>`).join('') || `<div class="empty small">—</div>`}</div></div>
+      <div class="grid2"><div><h3>${esc(t('Best sellers'))}</h3><div class="list">${r.topItems.slice(0, 5).map((i, n) => `<div class="li"><span class="av gold" style="width:28px;height:28px;border-radius:9px;font-size:13px">${n + 1}</span><div class="main name">${esc(i.name)}</div><span class="muted small">${soldTxt(i)}</span></div>`).join('') || `<div class="empty small">—</div>`}</div></div>
         <div><h3>${esc(t('Top debtors'))}</h3><div class="list">${r.debts.slice(0, 5).map(c => `<div class="li"><div class="main name">${esc(c.name)}</div><b class="red small">${fmt(c.balance)}</b></div>`).join('') || `<div class="empty small">—</div>`}</div></div></div>
       <div class="col" style="margin-top:4px">${can('viewInsights') ? `<button class="btn block" id="ins">${I('chart')}${esc(t('Insights'))}</button>` : ''}<button class="btn block" id="rep">${I('file')}${esc(t('Full reports'))}</button></div>`;
     $$('[data-go]', box).forEach(x => x.onclick = () => go(x.dataset.go));
@@ -750,15 +790,18 @@
       <div class="card"><h3>${esc(t('Daily sales by payment'))}</h3>${tbl([t('Date'), t('Business'), t('Sales'), t('Cash'), 'Zaad', 'Edahab', t('Credit'), t('Total')],
         r.days.map(d => `<tr><td>${esc(d.date.slice(5))}</td><td class="n">${esc(d.business === 'shop' ? t('Shop') : t('Food'))}</td><td class="n">${d.count}</td><td class="n">${fmt(d.cash)}</td><td class="n">${fmt(d.zaad)}</td><td class="n">${fmt(d.edahab)}</td><td class="n">${fmt(d.credit)}</td><td class="n"><b>${fmt(d.total)}</b></td></tr>`))}</div>
       <div class="card"><h3>${esc(t('Best-selling items'))}</h3>${tbl([t('Item'), t('Qty'), t('Sales')].concat(P ? [t('Profit')] : []),
-        r.topItems.map(i => `<tr><td>${esc(i.name)}</td><td class="n">${fmt(i.qty)}</td><td class="n">${fmt(i.revenue)}</td>${P ? `<td class="n">${fmt(i.profit)}</td>` : ''}</tr>`))}</div>
+        r.topItems.map(i => `<tr><td>${esc(i.name)}</td><td class="n">${soldTxt(i)}</td><td class="n">${fmt(i.revenue)}</td>${P ? `<td class="n">${fmt(i.profit)}</td>` : ''}</tr>`))}</div>
+      ${(r.looseSales || []).length ? `<div class="card"><h3>${esc(t('Loose sales'))}</h3>${tbl([t('Item'), t('Packets'), t('Pieces'), t('Money')].concat(P ? [t('Profit')] : []),
+        r.looseSales.map(i => `<tr><td>${esc(i.name)}</td><td class="n">${fmt(i.qty)}</td><td class="n">${fmt(i.pcs)}</td><td class="n">${fmt(i.revenue)}</td>${P ? `<td class="n green">${fmt(i.profit)}</td>` : ''}</tr>`))}
+        <p class="small muted" style="margin:8px 2px 0">${esc(t('Profit counts each piece at its real cost (packet cost ÷ pieces in a packet).'))}</p></div>` : ''}
       <div class="card"><h3>${esc(t('Sales by employee'))}</h3>${tbl([t('Name'), t('Business'), t('Sales'), t('Total')], r.employees.map(e => `<tr><td>${esc(e.name)}</td><td class="n">${esc(A.bizName(e.business))}</td><td class="n">${e.count}</td><td class="n">${fmt(e.total)}</td></tr>`))}</div>
       <div class="card"><h3>${esc(t('Expenses by category'))}</h3>${tbl([t('Category'), t('Business'), t('Amount')], r.expenses.map(e => `<tr><td>${esc(t(e.category))}</td><td class="n">${esc(A.bizName(e.business))}</td><td class="n">${fmt(e.amount)}</td></tr>`))}</div>
       <div class="card"><h3>${esc(t('Money balances from shifts'))}</h3>${tbl([t('Business'), t('Cash'), 'Zaad', 'Edahab', t('Cash difference')], r.balances.map(b => b.last ? `<tr><td>${esc(A.bizName(b.business))} <span class="small muted">${A.when(b.last.closeTs)}</span></td><td class="n">${fmt(b.last.cash)}</td><td class="n">${fmt(b.last.zaad)}</td><td class="n">${fmt(b.last.edahab)}</td><td class="n">${diffTxt(b.last.diffCash)}</td></tr>` : ''))}
         ${r.shifts.length ? `<div class="spacer"></div>${tbl([t('Shift'), t('Cash'), t('Expected'), t('Difference')], r.shifts.map(s => `<tr><td>${esc(s.userName)} ${A.when(s.openTs)}</td><td class="n">${s.status === 'closed' ? fmt(s.closeCash) : esc(t('Open'))}</td><td class="n">${s.status === 'closed' ? fmt(s.expectedCash) : ''}</td><td class="n">${s.status === 'closed' ? diffTxt(s.diffCash) : ''}</td></tr>`))}` : ''}</div>
       <div class="card"><h3>${esc(t('Customer debts'))} · ${money(r.totalDebt)}</h3>${tbl([t('Customer'), t('Phone'), t('Owes')], r.debts.map(c => `<tr><td>${esc(c.name)}</td><td class="n">${esc(c.phone || '')}</td><td class="n red">${fmt(c.balance)}</td></tr>`))}</div>
       ${r.suppliersOwed.length ? `<div class="card"><h3>${esc(t('We owe suppliers'))}</h3>${tbl([t('Supplier'), t('Amount')], r.suppliersOwed.map(s => `<tr><td>${esc(s.name)}</td><td class="n">${fmt(s.balance)}</td></tr>`))}</div>` : ''}
-      <div class="card"><h3>${esc(t('Low stock'))}</h3>${tbl([t('Item'), t('Stock'), t('Low level')], r.lowStock.map(p => `<tr><td>${esc(p.name)}</td><td class="n red">${fmt(p.stock)}</td><td class="n">${fmt(p.lowStock)}</td></tr>`).concat(r.lowIngredients.map(g => `<tr><td>${esc(t(g.name))} (${esc(t(g.unit))})</td><td class="n red">${fmt(g.stock)}</td><td class="n">${fmt(g.lowLevel)}</td></tr>`)))}</div>
-      ${r.expiring.length ? `<div class="card"><h3>${esc(t('Expired / expiring'))}</h3>${tbl([t('Item'), t('Expiry'), t('Stock')], r.expiring.map(p => `<tr><td>${esc(p.name)}</td><td class="n ${p.expired ? 'red' : 'amber'}">${esc(p.expiry)}</td><td class="n">${fmt(p.stock)}</td></tr>`))}</div>` : ''}
+      <div class="card"><h3>${esc(t('Low stock'))}</h3>${tbl([t('Item'), t('Stock'), t('Low level')], r.lowStock.map(p => `<tr><td>${esc(p.name)}</td><td class="n red">${esc(p.stockTxt || fmt(p.stock))}</td><td class="n">${fmt(p.lowStock)}${p.loose ? ' ' + esc(t('pk')) : ''}</td></tr>`).concat(r.lowIngredients.map(g => `<tr><td>${esc(t(g.name))} (${esc(t(g.unit))})</td><td class="n red">${fmt(g.stock)}</td><td class="n">${fmt(g.lowLevel)}</td></tr>`)))}</div>
+      ${r.expiring.length ? `<div class="card"><h3>${esc(t('Expired / expiring'))}</h3>${tbl([t('Item'), t('Expiry'), t('Stock')], r.expiring.map(p => `<tr><td>${esc(p.name)}</td><td class="n ${p.expired ? 'red' : 'amber'}">${esc(p.expiry)}</td><td class="n">${esc(findProd(p.id) ? A.stockTxt(findProd(p.id), p.stock) : fmt(p.stock))}</td></tr>`))}</div>` : ''}
 `;
   }
 
@@ -833,13 +876,13 @@
       const v = $('#q').value.toLowerCase();
       let l = (S.data.products || []).filter(p => p.business === S.biz);
       if (filter === 'off') l = l.filter(p => String(p.active) === '0'); else l = l.filter(p => String(p.active) !== '0');
-      if (filter === 'low') l = l.filter(p => num(p.stock) <= num(p.lowStock));
+      if (filter === 'low') l = l.filter(p => A.isLow(p));
       if (filter === 'exp') l = l.filter(p => p.expiry && p.expiry <= lim);
       if (v) l = l.filter(p => String(p.name).toLowerCase().includes(v) || String(p.barcode).includes(v) || String(p.category || '').toLowerCase().includes(v));
       l.sort((a, b) => String(a.name).localeCompare(b.name));
-      $('#pl').innerHTML = `<div class="small muted" style="margin:0 4px 6px">${l.length} ${esc(t('items'))}</div><div class="list">${l.slice(0, 300).map(p => `<div class="li tap lead" data-id="${esc(p.id)}"><span class="av ${!food && num(p.stock) <= num(p.lowStock) ? 'red' : 'gold'}">${I(food ? 'food' : 'box')}</span><div class="main"><div class="name">${num(p.fav) ? I('star', 'sm') + ' ' : ''}${esc(p.name)}</div>
+      $('#pl').innerHTML = `<div class="small muted" style="margin:0 4px 6px">${l.length} ${esc(t('items'))}</div><div class="list">${l.slice(0, 300).map(p => `<div class="li tap lead" data-id="${esc(p.id)}"><span class="av ${!food && A.isLow(p) ? 'red' : 'gold'}">${I(food ? 'food' : 'box')}</span><div class="main"><div class="name">${num(p.fav) ? I('star', 'sm') + ' ' : ''}${esc(p.name)}${looseTag(p)}</div>
         <div class="sub">${esc(p.category || '')} ${p.barcode ? '· ' + esc(p.barcode) : ''} ${p.expiry ? `· <span class="${p.expiry < A.today() ? 'red' : p.expiry <= lim ? 'amber' : ''}">${esc(t('Exp'))} ${esc(p.expiry)}</span>` : ''}</div></div>
-        <div class="right"><b>${fmt(p.price)}</b>${!food && can('viewStock') ? `<div class="small ${num(p.stock) <= num(p.lowStock) ? 'red bold' : 'muted'}">${esc(t('Stock'))} ${fmt(p.stock)}</div>` : ''}</div></div>`).join('') || `<div class="empty">${esc(t('Nothing found'))}</div>`}</div>`;
+        <div class="right"><b>${fmt(p.price)}</b>${!food && can('viewStock') ? `<div class="small ${A.isLow(p) ? 'red bold' : 'muted'}">${esc(t('Stock'))} ${esc(A.stockTxt(p))}</div>` : ''}</div></div>`).join('') || `<div class="empty">${esc(t('Nothing found'))}</div>`}</div>`;
       $$('#pl .li').forEach(r => r.onclick = () => productForm(findProd(r.dataset.id), draw));
     };
     $('#q').oninput = draw;
@@ -862,12 +905,14 @@
       <label class="f"><span>${esc(t('Barcode'))}</span><div class="row"><input class="in grow" name="barcode" value="${esc(p.barcode || '')}" inputmode="numeric" ${mp ? '' : 'readonly'}>${mp ? `<button type="button" class="iconbtn tonal" id="sb">${I('scan')}</button>` : ''}</div></label>
       <div class="grid2">${moneyInput('price', t('Selling price (SH)'), p.price, isNew || cp ? 'required' : 'readonly')}${showCost ? moneyInput('cost', t('Cost price (SH)'), p.cost, isNew || cp ? '' : 'readonly') : ''}</div>
       <label class="f"><span>${esc(t('Category'))}</span><input class="in" name="category" list="cats" value="${esc(p.category || '')}" ${mp ? '' : 'readonly'}><datalist id="cats">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist></label>
-      ${!food ? `<div class="grid2">${moneyInput('stock', t('Stock now'), isNew ? '' : p.stock, mp ? '' : 'readonly')}${moneyInput('lowStock', t('Warn when stock is at'), isNew ? setting('defaultLowStock') : p.lowStock, mp ? '' : 'readonly')}</div>
+      ${!food ? `<div class="card ring lzcard"><label class="row lzsw" style="align-items:center;gap:12px;margin:0"><div class="grow"><b>${esc(t('Sell loose (pieces)'))}</b><div class="small muted" id="lzd"></div></div>
+          <input type="checkbox" class="sw" name="loose" ${A.isLoose(p) ? 'checked' : ''} ${mp ? '' : 'disabled'}></label><div id="lzb"></div></div>
+      <div id="stk"></div>
       <label class="f"><span>${esc(t('Expiry date (optional)'))}</span><input class="in" type="date" name="expiry" value="${esc(p.expiry || '')}" ${mp ? '' : 'readonly'}></label>` : ''}
       ${mp ? `<label class="chk"><input type="checkbox" name="fav" ${num(p.fav) ? 'checked' : ''}><span class="main">${esc(t('Always show on the sell screen'))}</span></label>
       ${!isNew ? `<label class="chk"><input type="checkbox" name="active" ${String(p.active) !== '0' ? 'checked' : ''}><span class="main">${esc(t('Active (can be sold)'))}</span></label>` : ''}` : ''}
       ${!isNew ? `<p class="small muted">${esc(t('Sold so far'))}: ${fmt(p.sold)}</p>` : ''}</form>`,
-      onOpen: el => { const sb = $('#sb', el); if (sb) sb.onclick = async () => { const c = await A.scanOnce(); if (c) $('[name=barcode]', el).value = c; }; },
+      onOpen: el => { const sb = $('#sb', el); if (sb) sb.onclick = async () => { const c = await A.scanOnce(); if (c) $('[name=barcode]', el).value = c; }; if (!food) looseForm(el, p, isNew, mp, cp, showCost); },
       actions: [!isNew && can('deleteProducts') ? { label: t('Delete'), cls: 'red', icon: 'trash', onClick: async close => {
         needOnline();
         if (!(await confirmBox(t('Delete {n}? Old sales and reports keep its name.', { n: p.name }), t('Delete'), 'red'))) return;
@@ -879,12 +924,67 @@
         const f = formData($('#f', el));
         const d = { id: isNew ? '' : p.id, business: p.business || S.biz, name: f.name, barcode: f.barcode, price: num(f.price), category: f.category, lowStock: f.lowStock, expiry: f.expiry || '', fav: f.fav, active: isNew ? 1 : f.active };
         if (showCost) d.cost = num(f.cost);
-        if (!food) d.stock = f.stock;
+        if (!food) {
+          const lz = el._lz();
+          Object.assign(d, { loose: lz.on ? 1 : 0, perPack: lz.per, looseTable: lz.rows, stock: lz.stock });
+          if (lz.on && !(lz.per >= 2)) throw new Error(t('Pieces in one packet must be 2 or more'));
+        }
         if (!d.name || !(d.price > 0)) throw new Error(t('Name and price are required'));
         const r = await api('prod.save', d);
         A.upsert('products', r.product); toast(t('Saved'), 'ok'); close(); if (done) done();
       } }] : []) });
     return sh;
+  }
+  // The "Sell loose" part of the product form: switch, pieces per packet, price list for pieces, and stock as packets + pieces.
+  function looseForm(el, p, isNew, mp, cp, showCost) {
+    let on = A.isLoose(p), per = num(p.perPack) || 20;
+    let rows = A.looseTable(p); if (!rows.length) rows = [[1, Math.round(num(p.price) / per) || 0]];
+    let stockUnits = isNew ? '' : num(p.stock);   // pieces when loose, otherwise units/packets
+    const price = () => num($('[name=price]', el).value), cost = () => num(($('[name=cost]', el) || {}).value || p.cost);
+    const readStock = () => {
+      if ($('[name=stockPk]', el)) { const pk = $('[name=stockPk]', el).value, pc = $('[name=stockPc]', el).value; stockUnits = pk === '' && pc === '' ? '' : num(pk) * per + num(pc); }
+      else if ($('[name=stock]', el)) stockUnits = $('[name=stock]', el).value === '' ? '' : num($('[name=stock]', el).value);
+    };
+    const readRows = () => { if ($('#lzt', el)) rows = $$('#lzt tr[data-i]', el).map(tr => [num($('[data-k=q]', tr).value), num($('[data-k=p]', tr).value)]); };
+    const drawStock = () => {
+      const ro = mp ? '' : 'readonly';
+      $('#stk', el).innerHTML = on
+        ? `<div class="grid2">${moneyInput('stockPk', t('Stock — packets'), stockUnits === '' ? '' : Math.floor(stockUnits / per), ro)}${moneyInput('stockPc', t('+ loose pieces'), stockUnits === '' ? '' : stockUnits % per, ro)}</div>
+           <div class="grid2">${moneyInput('lowStock', t('Warn when packets are at'), isNew ? setting('defaultLowStock') : p.lowStock, ro)}<div></div></div>`
+        : `<div class="grid2">${moneyInput('stock', t('Stock now'), stockUnits, ro)}${moneyInput('lowStock', t('Warn when stock is at'), isNew ? setting('defaultLowStock') : p.lowStock, ro)}</div>`;
+    };
+    const drawRows = () => {
+      const pc = cost() / per, ro = cp || isNew ? '' : 'readonly';
+      $('#lzt', el).innerHTML = `<tr><th style="width:68px">${esc(t('Pieces'))}</th><th class="n">${esc(t('Price (SH)'))}</th>${showCost ? `<th class="n">${esc(t('Profit'))}</th>` : ''}<th></th></tr>` +
+        rows.map((r, i) => { const pf = Math.round(num(r[1]) - num(r[0]) * pc); return `<tr data-i="${i}"><td><input data-k="q" inputmode="numeric" value="${r[0] || ''}" style="text-align:center" ${ro}></td><td><input data-k="p" inputmode="numeric" value="${r[1] || ''}" ${ro}></td>
+          ${showCost ? `<td class="pf ${pf < 0 ? 'red' : ''}">${r[0] && r[1] ? (pf > 0 ? '+' : '') + fmt(pf) : ''}</td>` : ''}<td>${ro ? '' : `<button type="button" class="iconbtn sm" data-del="${i}" aria-label="remove">${I('x', 'sm')}</button>`}</td></tr>`; }).join('');
+      $$('#lzt input', el).forEach(x => x.onchange = () => { readRows(); drawRows(); });
+      $$('#lzt [data-del]', el).forEach(b => b.onclick = () => { readRows(); rows.splice(num(b.dataset.del), 1); drawRows(); });
+      $('#pcost', el).innerHTML = showCost ? esc(t('Cost of 1 piece: {c} ÷ {n} = {x}', { c: fmt(cost()), n: per, x: money(Math.round(pc)) })) : '';
+    };
+    const draw = () => {
+      $('#lzd', el).textContent = on ? t('On — sold as a packet or in pieces') : t('Off — this item is only sold whole. Most items stay like this.');
+      el.querySelector('.lzcard').classList.toggle('on', on);
+      $('#lzb', el).innerHTML = on ? `<div class="grid2" style="margin-top:12px">${moneyInput('perPack', t('Pieces in one packet'), per, mp ? '' : 'readonly')}<div></div></div>
+        <div class="small muted" id="pcost" style="margin:-4px 0 8px"></div>
+        <table class="ptab" id="lzt"></table>${cp || isNew ? `<button type="button" class="btn sm text" id="lzadd" style="padding-left:0">+ ${esc(t('Add a row'))}</button>` : ''}
+        <div class="note">${esc(t('Amounts not in the list are added up from it, and never cost more than a packet. A full packet is always the packet price.'))}</div>` : '';
+      if (on) {
+        drawRows();
+        $('[name=perPack]', el).onchange = e => { readStock(); per = Math.max(2, Math.floor(num(e.target.value))) || 20; drawRows(); drawStock(); };
+        if ($('#lzadd', el)) $('#lzadd', el).onclick = () => { readRows(); const last = rows[rows.length - 1] || [0, 0]; rows.push([Math.min(per - 1, num(last[0]) + 1), '']); drawRows(); };
+      }
+      drawStock();
+    };
+    $('[name=loose]', el).onchange = e => {
+      readStock();
+      if (e.target.checked && !on && stockUnits !== '') stockUnits = num(stockUnits) * per;            // packets → pieces
+      if (!e.target.checked && on && stockUnits !== '') stockUnits = Math.floor(num(stockUnits) / per);  // pieces → whole packets
+      on = e.target.checked; draw();
+    };
+    ['price', 'cost'].forEach(n => { const x = $(`[name=${n}]`, el); if (x) x.addEventListener('input', () => { if (on) { readRows(); drawRows(); } }); });
+    el._lz = () => { readStock(); readRows(); return { on, per, rows: rows.filter(r => r[0] > 0 && r[1] > 0), stock: stockUnits }; };
+    draw();
   }
   function importSheet(done) {
     const map = { name: /^(name|magac|magaca|product|item)/i, barcode: /^(barcode|code|bar)/i, category: /^(category|qayb|cat)/i, price: /^(price|qiime|sell)/i, cost: /^(cost|kharash|buy)/i, stock: /^(stock|kayd|qty|quantity)/i, lowStock: /^(low)/i, expiry: /^(expiry|exp|dhac)/i };
@@ -927,21 +1027,26 @@
     const save = () => A.LS.set('count', S.count);
     const ask = p => {
       const prev = S.count.find(c => c.productId === p.id);
-      sheet({ title: p.name, body: `<p>${esc(t('System stock'))}: <b>${fmt(p.stock)}</b></p>${moneyInput('n', t('Real count'), prev ? prev.counted : '', 'autofocus')}`,
+      const lz = A.isLoose(p), per = num(p.perPack);
+      sheet({ title: p.name, body: `<p>${esc(t('System stock'))}: <b>${esc(A.stockTxt(p))}</b></p>` + (lz
+          ? `<div class="grid2">${moneyInput('pk', t('Full packets'), prev ? Math.floor(prev.counted / per) : '', 'autofocus')}${moneyInput('pc', t('+ loose pieces'), prev ? prev.counted % per : '')}</div>`
+          : moneyInput('n', t('Real count'), prev ? prev.counted : '', 'autofocus')),
         actions: [{ label: t('Cancel') }, { label: t('OK'), cls: 'gold', onClick: (close, el) => {
-          const v = $('[name=n]', el).value; if (v === '') throw new Error(t('Enter a number'));
+          let v;
+          if (lz) { const a = $('[name=pk]', el).value, b = $('[name=pc]', el).value; if (a === '' && b === '') throw new Error(t('Enter a number')); v = num(a) * per + num(b); }
+          else { v = $('[name=n]', el).value; if (v === '') throw new Error(t('Enter a number')); }
           S.count = S.count.filter(c => c.productId !== p.id); S.count.unshift({ productId: p.id, name: p.name, system: num(p.stock), counted: num(v) }); save(); close(); draw();
         } }] });
     };
     const draw = () => {
-      $('#cl').innerHTML = `<div class="list">${S.count.map(c => { const d = c.counted - c.system; return `<div class="li tap" data-id="${esc(c.productId)}"><div class="main"><div class="name">${esc(c.name)}</div><div class="sub">${esc(t('System'))} ${fmt(c.system)} → ${esc(t('Real'))} ${fmt(c.counted)}</div></div>
-        <b class="${d < 0 ? 'red' : d > 0 ? 'amber' : 'green'}">${d > 0 ? '+' : ''}${fmt(d)}</b></div>`; }).join('') || `<div class="empty">${esc(t('Nothing counted yet'))}</div>`}</div>`;
+      $('#cl').innerHTML = `<div class="list">${S.count.map(c => { const d = c.counted - c.system, p = findProd(c.productId) || {}; return `<div class="li tap" data-id="${esc(c.productId)}"><div class="main"><div class="name">${esc(c.name)}</div><div class="sub">${esc(t('System'))} ${esc(A.stockTxt(p, c.system))} → ${esc(t('Real'))} ${esc(A.stockTxt(p, c.counted))}</div></div>
+        <b class="${d < 0 ? 'red' : d > 0 ? 'amber' : 'green'}">${d > 0 ? '+' : ''}${A.isLoose(p) ? esc(A.stockTxt(p, d)) : fmt(d)}</b></div>`; }).join('') || `<div class="empty">${esc(t('Nothing counted yet'))}</div>`}</div>`;
       $$('#cl .li').forEach(r => r.onclick = () => ask(findProd(r.dataset.id)));
     };
     $('#q').oninput = () => {
       const v = $('#q').value.trim().toLowerCase();
       const l = v ? prods('shop').filter(p => String(p.name).toLowerCase().includes(v) || String(p.barcode).startsWith(v)).slice(0, 20) : [];
-      $('#res').innerHTML = l.length ? `<div class="list">${l.map(p => `<div class="li tap" data-id="${esc(p.id)}"><div class="main name">${esc(p.name)}</div><span class="muted">${fmt(p.stock)}</span></div>`).join('')}</div>` : '';
+      $('#res').innerHTML = l.length ? `<div class="list">${l.map(p => `<div class="li tap" data-id="${esc(p.id)}"><div class="main name">${esc(p.name)}</div><span class="muted">${esc(A.stockTxt(p))}</span></div>`).join('')}</div>` : '';
       $$('#res .li').forEach(r => r.onclick = () => { $('#q').value = ''; $('#res').innerHTML = ''; ask(findProd(r.dataset.id)); });
     };
     $('#q').onkeydown = e => { if (e.key === 'Enter') { const p = prods('shop').find(x => x.barcode === $('#q').value.trim()); if (p) { $('#q').value = ''; ask(p); } } };
@@ -1052,13 +1157,13 @@
   function itemPicker(el, lines, onChange, withCost) {
     const food = S.biz === 'food';
     const pool = () => (food ? (S.data.ingredients || []).map(g => ({ kind: 'i', id: g.id, name: t(g.name) + ' (' + t(g.unit) + ')', cost: g.cost, stock: g.stock, low: g.lowLevel })) : [])
-      .concat(prods().map(p => ({ kind: 'p', id: p.id, name: p.name, cost: p.cost, stock: p.stock, low: p.lowStock, barcode: p.barcode })));
+      .concat(prods().map(p => ({ kind: 'p', id: p.id, name: p.name, cost: p.cost, stock: A.isLoose(p) ? num(p.stock) / num(p.perPack) : p.stock, stockTxt: A.stockTxt(p), low: p.lowStock, barcode: p.barcode, loose: A.isLoose(p) })));
     const add = x => { if (!lines.find(l => l.refId === x.id)) lines.push({ kind: x.kind, refId: x.id, name: x.name, qty: 1, cost: num(x.cost) }); draw(); onChange(); };
     el.innerHTML = `<div class="row"><label class="search" style="box-shadow:inset 0 0 0 1px var(--line);background:var(--surface-2)">${I('search', 'sm')}<input id="iq" placeholder="${esc(t('Search item to add'))}"></label><button type="button" class="iconbtn tonal" id="isc">${I('scan')}</button></div><div id="ir" style="margin-top:8px"></div><div id="il" style="margin-top:8px"></div>`;
     $('#iq', el).oninput = () => {
       const v = $('#iq', el).value.toLowerCase();
       const l = v ? pool().filter(x => x.name.toLowerCase().includes(v) || String(x.barcode || '').startsWith(v)).slice(0, 12) : [];
-      $('#ir', el).innerHTML = l.length ? `<div class="list">${l.map(x => `<div class="li tap" data-id="${esc(x.id)}"><div class="main name">${esc(x.name)}</div><span class="muted small">${x.kind === 'i' || S.biz === 'shop' ? esc(t('Stock')) + ' ' + fmt(x.stock) : ''}</span>${I('plus', 'sm')}</div>`).join('')}</div>` : '';
+      $('#ir', el).innerHTML = l.length ? `<div class="list">${l.map(x => `<div class="li tap" data-id="${esc(x.id)}"><div class="main name">${esc(x.name)}</div><span class="muted small">${x.kind === 'i' || S.biz === 'shop' ? esc(t('Stock')) + ' ' + esc(x.stockTxt || fmt(x.stock)) : ''}</span>${I('plus', 'sm')}</div>`).join('')}</div>` : '';
       $$('#ir .li', el).forEach(r => r.onclick = () => { add(pool().find(x => x.id === r.dataset.id)); $('#iq', el).value = ''; $('#ir', el).innerHTML = ''; });
     };
     $('#isc', el).onclick = async () => { const c = await A.scanOnce(); if (!c) return; const x = pool().find(y => y.barcode === c); if (x) add(x); else toast(t('Barcode not found: {c}', { c }), 'err'); };
@@ -1095,7 +1200,7 @@
     const total = () => lines.reduce((a, l) => a + num(l.qty) * num(l.cost), 0);
     const upd = () => { $('#tot', el).textContent = money(total()); if (pay === 'full' && $('[name=paid]', el)) $('[name=paid]', el).value = total(); };
     const pk = itemPicker($('#pk', el), lines, upd, true);
-    $('#low', el).onclick = () => { pk.pool().filter(x => (x.kind === 'i' || S.biz === 'shop') && num(x.stock) <= num(x.low)).forEach(x => { if (!lines.find(l => l.refId === x.id)) lines.push({ kind: x.kind, refId: x.id, name: x.name, qty: Math.max(1, num(x.low) * 2 - num(x.stock)), cost: num(x.cost) }); }); pk.draw(); upd(); if (!lines.length) toast(t('Nothing is low on stock'), 'ok'); };
+    $('#low', el).onclick = () => { pk.pool().filter(x => (x.kind === 'i' || S.biz === 'shop') && num(x.stock) <= num(x.low)).forEach(x => { if (!lines.find(l => l.refId === x.id)) lines.push({ kind: x.kind, refId: x.id, name: x.name, qty: Math.max(1, Math.ceil(num(x.low) * 2 - num(x.stock))), cost: num(x.cost) }); }); pk.draw(); upd(); if (!lines.length) toast(t('Nothing is low on stock'), 'ok'); };
     if (!po) {
       seg($('#pay', el), v => { pay = v; $('#paybox', el).classList.toggle('hidden', v === 'credit'); $('[name=paid]', el).value = v === 'full' ? total() : ''; if (v === 'part') $('[name=paid]', el).focus(); });
       seg($('[data-name=method]', el));
@@ -1252,7 +1357,7 @@
         if (!$('#hist')) return;
         const card = x => { let items = []; try { items = JSON.parse(x.items || '[]'); } catch (e) {} return `<div class="card" data-id="${esc(x.id)}"><div class="row"><b class="grow">${money(x.amount)} · ${esc(A.methodName(x.method))}</b>
           <span class="pill ${x.status === 'approved' ? 'green' : x.status === 'rejected' ? 'red' : 'gold'}">${esc(t(x.status === 'approved' ? 'Approved' : x.status === 'rejected' ? 'Rejected' : 'Pending'))}</span></div>
-          <div class="small">${items.map(i => esc(i.name) + ' ×' + fmt(i.qty)).join(', ')}</div><div class="small muted">${esc(t('Reason'))}: ${esc(x.reason)} · ${esc(x.requestedBy)} · ${A.when(x.ts)}${x.decidedBy ? ' · ' + esc(x.decidedBy) : ''}</div>
+          <div class="small">${items.map(i => esc(i.name) + (i.unit === 'pc' ? ' · ' + fmt(i.qty) + ' ' + t('pcs') : ' ×' + fmt(i.qty))).join(', ')}</div><div class="small muted">${esc(t('Reason'))}: ${esc(x.reason)} · ${esc(x.requestedBy)} · ${A.when(x.ts)}${x.decidedBy ? ' · ' + esc(x.decidedBy) : ''}</div>
           ${x.status === 'pending' && approver ? `<div class="grid2" style="margin-top:8px"><button class="btn red" data-act="0">${esc(t('Reject'))}</button><button class="btn green" data-act="1">${esc(t('Approve'))}</button></div>` : ''}</div>`; };
         if ($('#pend')) $('#pend').innerHTML = r.refunds.filter(x => x.status === 'pending').map(card).join('') || `<div class="card empty">${esc(t('Nothing waiting'))}</div>`;
         $('#hist').innerHTML = r.refunds.filter(x => x.status !== 'pending' || !approver).map(card).join('') || `<div class="card empty">—</div>`;
@@ -1275,26 +1380,27 @@
       const v = $('#q', sh.el).value.toLowerCase();
       const l = r.sales.filter(s => s.status !== 'refunded' && s.status !== 'undone' && s.status !== 'void' && (!v || JSON.stringify(s).toLowerCase().includes(v))).slice(0, 60);
       $('#sl', sh.el).innerHTML = `<div class="list">${l.map(s => `<div class="li tap" data-id="${esc(s.id)}"><div class="main"><div class="name">${money(s.total)} · ${esc(A.methodName(s.method))}${s.customerName ? ' · ' + esc(s.customerName) : ''}</div>
-        <div class="sub">${A.when(s.ts)} · ${esc(s.userName)} · ${s.items.map(i => esc(i.name) + ' ×' + fmt(i.qty)).join(', ')}</div></div></div>`).join('') || `<div class="empty">${esc(t('No sales found'))}</div>`}</div>`;
+        <div class="sub">${A.when(s.ts)} · ${esc(s.userName)} · ${s.items.map(i => esc(i.name) + (i.unit === 'pc' ? ' · ' + fmt(i.qty) + ' ' + t('pcs') : ' ×' + fmt(i.qty))).join(', ')}</div></div></div>`).join('') || `<div class="empty">${esc(t('No sales found'))}</div>`}</div>`;
       $$('#sl .li', sh.el).forEach(li => li.onclick = () => { sh.close(); refundItems(r.sales.find(s => s.id === li.dataset.id), done); });
     };
     $('#q', sh.el).oninput = draw; draw();
   }
   function refundItems(sale, done) {
-    const q = {}; sale.items.forEach(i => { q[i.productId] = num(i.qty); });
+    const key = i => i.productId + '|' + (i.unit === 'pc' ? 'pc' : '');   // a packet line and a pieces line are separate
+    const q = {}; sale.items.forEach(i => { q[key(i)] = num(i.qty); });
     const sh = sheet({ title: t('Refund') + ' · ' + money(sale.total), body: `<div id="it"></div><label class="f"><span>${esc(t('Reason (required)'))}</span><textarea class="in" name="reason"></textarea></label>
       <p class="small muted">${esc(t('An owner must approve before money or stock changes.'))}</p>`,
       actions: [{ label: t('Cancel') }, { label: t('Send request'), cls: 'gold', onClick: async (close, el) => {
         const reason = $('[name=reason]', el).value.trim(); if (!reason) throw new Error(t('Write a reason'));
-        const items = Object.keys(q).filter(k => q[k] > 0).map(k => ({ productId: k, qty: q[k] }));
+        const items = Object.keys(q).filter(k => q[k] > 0).map(k => ({ productId: k.split('|')[0], unit: k.split('|')[1], qty: q[k] }));
         if (!items.length) throw new Error(t('Choose at least one item'));
         await api('refund.request', { id: A.uid('RF'), saleId: sale.id, items, reason });
         toast(t('Refund request sent to the owner'), 'ok'); close(); done && done();
       } }] });
     const draw = () => {
-      $('#it', sh.el).innerHTML = `<div class="list">${sale.items.map(i => `<div class="li"><div class="main"><div class="name">${esc(i.name)}</div><div class="sub">${fmt(i.price)} · ${esc(t('sold'))} ${fmt(i.qty)}</div></div>
-        <div class="qty"><button data-id="${esc(i.productId)}" data-d="-1">−</button><b>${q[i.productId]}</b><button data-id="${esc(i.productId)}" data-d="1">+</button></div></div>`).join('')}</div>`;
-      $$('#it .qty button', sh.el).forEach(b => b.onclick = () => { const it = sale.items.find(i => i.productId === b.dataset.id); q[b.dataset.id] = Math.max(0, Math.min(num(it.qty), q[b.dataset.id] + num(b.dataset.d))); draw(); });
+      $('#it', sh.el).innerHTML = `<div class="list">${sale.items.map(i => `<div class="li"><div class="main"><div class="name">${esc(i.name)}${i.unit === 'pc' ? ` <span class="lz">${esc(t('PIECES'))}</span>` : ''}</div><div class="sub">${i.unit === 'pc' ? fmt(i.lineTotal) + ' · ' + esc(t('sold')) + ' ' + fmt(i.qty) + ' ' + esc(t('pcs')) : fmt(i.price) + ' · ' + esc(t('sold')) + ' ' + fmt(i.qty)}</div></div>
+        <div class="qty"><button data-k="${esc(key(i))}" data-d="-1">−</button><b>${q[key(i)]}</b><button data-k="${esc(key(i))}" data-d="1">+</button></div></div>`).join('')}</div>`;
+      $$('#it .qty button', sh.el).forEach(b => b.onclick = () => { const it = sale.items.find(i => key(i) === b.dataset.k); q[b.dataset.k] = Math.max(0, Math.min(num(it.qty), q[b.dataset.k] + num(b.dataset.d))); draw(); });
     };
     draw();
   }

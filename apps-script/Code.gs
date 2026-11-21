@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.3.0';
+var VERSION = '1.4.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -20,10 +20,10 @@ var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
 var SCHEMA = {
   Settings:   ['key', 'value', 'note'],
   Users:      ['id', 'name', 'role', 'business', 'pinHash', 'salt', 'active', 'lang', 'afterHours', 'perms', 'createdAt', 'pinChanged'],
-  Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt', 'lowAlerted', 'deleted'],
+  Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt', 'lowAlerted', 'deleted', 'loose', 'perPack', 'looseTable'],
   Sales:      ['id', 'ts', 'date', 'business', 'userId', 'userName', 'shiftId', 'method', 'orderType', 'customerId', 'customerName', 'subtotal', 'discount', 'total', 'cost', 'tendered', 'tenderCur', 'change', 'status', 'refunded', 'note',
                'payCur', 'usdAmount', 'undoneBy', 'undoneTs', 'undoReason'],
-  SaleItems:  ['saleId', 'date', 'business', 'productId', 'name', 'qty', 'price', 'cost', 'lineTotal'],
+  SaleItems:  ['saleId', 'date', 'business', 'productId', 'name', 'qty', 'price', 'cost', 'lineTotal', 'unit'],
   Shifts:     ['id', 'business', 'userId', 'userName', 'status', 'openTs', 'closeTs', 'date', 'openCash', 'openZaadSH', 'openZaadUSD', 'openEdSH', 'openEdUSD',
                'closeCash', 'closeZaadSH', 'closeZaadUSD', 'closeEdSH', 'closeEdUSD', 'rate',
                'cashSales', 'zaadSales', 'edSales', 'creditSales', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'refCash', 'refZaad', 'refEd',
@@ -215,6 +215,42 @@ function recent_(name, since) {
   return (T_[key] = rows);
 }
 
+/* ---------- selling loose (pieces) ----------
+   A product with "loose" on (Shop only) keeps its stock in PIECES. price and cost stay per packet; lowStock is in packets.
+   looseTable is the owner's price list for pieces, e.g. [[1,1000],[2,2000],[3,2500]]. */
+function isLoose_(p) { return !!p && p.business === 'shop' && isOn_(p.loose) && num_(p.perPack) > 1; }
+function pieces_(p, qty, unit) { return isLoose_(p) ? (unit === 'pc' ? num_(qty) : num_(qty) * num_(p.perPack)) : num_(qty); }
+function lowAt_(p) { return isLoose_(p) ? num_(p.lowStock) * num_(p.perPack) : num_(p.lowStock); }
+function soldDelta_(p, qty, unit) { return isLoose_(p) ? Math.round(pieces_(p, qty, unit) / num_(p.perPack) * 100) / 100 : num_(qty); }
+function stockTxt_(p, n) {
+  n = n === undefined ? num_(p.stock) : num_(n);
+  if (!isLoose_(p)) return fmt_(n);
+  var per = num_(p.perPack), neg = n < 0, a = Math.abs(n), pk = Math.floor(a / per), pc = a % per;
+  return (neg ? '−' : '') + (pk ? pk + ' pk' : '') + (pk && pc ? ' + ' : '') + (pc || !pk ? pc + ' pcs' : '');
+}
+function looseTable_(p) {
+  var t = []; try { t = JSON.parse(p.looseTable || '[]'); } catch (e) {}
+  return (Array.isArray(t) ? t : []).map(function (r) { return [Math.floor(num_(r[0])), num_(r[1])]; })
+    .filter(function (r) { return r[0] > 0 && r[1] > 0 && r[0] < num_(p.perPack); }).sort(function (a, b) { return a[0] - b[0]; });
+}
+// Price of n pieces: whole packets at the packet price, the rest from the price list (added up from the biggest rows), never more than a packet.
+function loosePrice_(p, n) {
+  var per = num_(p.perPack), pack = num_(p.price), tab = looseTable_(p);
+  var total = Math.floor(n / per) * pack, rest = n % per;
+  if (!rest) return total;
+  var exact = tab.filter(function (r) { return r[0] === rest; })[0], part = 0;
+  if (exact) part = exact[1];
+  else {
+    var left = rest, desc = tab.slice().reverse();
+    while (left > 0) {
+      var r = desc.filter(function (x) { return x[0] <= left; })[0];
+      if (!r) { part += Math.round(pack / per * left); break; }
+      part += r[1]; left -= r[0];
+    }
+  }
+  return total + Math.min(part, pack);
+}
+
 function norm_(v) {
   if (v instanceof Date) {
     var h = v.getHours() + v.getMinutes() + v.getSeconds();
@@ -267,7 +303,7 @@ function insertMany_(name, list) {
 }
 
 function update_(name, o) {
-  if (name === 'Products' && isOn_(o.lowAlerted) && num_(o.stock) > num_(o.lowStock)) o.lowAlerted = 0;
+  if (name === 'Products' && isOn_(o.lowAlerted) && num_(o.stock) > lowAt_(o)) o.lowAlerted = 0;
   var t = table_(name);
   t.sh.getRange(o._r, 1, 1, t.headers.length).setValues([rowArr_(t, o)]);
   return o;
@@ -474,11 +510,13 @@ var ACTIONS = {
       var p = find_('Products', it.productId);
       if (!p || p.business !== biz) throw new Error('Product not found: ' + (it.name || it.productId));
       var q = num_(it.qty); if (q <= 0) throw new Error('Wrong quantity for ' + p.name);
-      var price = num_(p.price), c = num_(p.cost);
-      lines.push({ saleId: id, date: dateOf_(ts), business: biz, productId: p.id, name: p.name, qty: q, price: price, cost: c, lineTotal: price * q });
-      subtotal += price * q; cost += c * q;
-      if (biz === 'shop') p.stock = num_(p.stock) - q;
-      p.sold = num_(p.sold) + q; touched.push(p);
+      var unit = it.unit === 'pc' && isLoose_(p) ? 'pc' : '';
+      var price = num_(p.price), c = num_(p.cost), line = price * q;
+      if (unit === 'pc') { q = Math.floor(q); line = loosePrice_(p, q); price = Math.round(line / q * 100) / 100; c = Math.round(num_(p.cost) / num_(p.perPack) * 100) / 100; }
+      lines.push({ saleId: id, date: dateOf_(ts), business: biz, productId: p.id, name: p.name, qty: q, price: price, cost: c, lineTotal: line, unit: unit });
+      subtotal += line; cost += c * q;
+      if (biz === 'shop') p.stock = num_(p.stock) - pieces_(p, q, unit);
+      p.sold = Math.round((num_(p.sold) + soldDelta_(p, q, unit)) * 100) / 100; if (touched.indexOf(p) < 0) touched.push(p);
     });
     var discount = Math.max(0, Math.min(num_(d.discount), subtotal));
     if (discount > 0) need_(u, 'discount');
@@ -507,8 +545,8 @@ var ACTIONS = {
     var now = nowIso_();
     touched.forEach(function (p) {
       p.updatedAt = now;
-      if (p.business === 'shop' && num_(p.lowStock) > 0 && num_(p.stock) <= num_(p.lowStock) && !isOn_(p.lowAlerted)) {
-        p.lowAlerted = 1; (T_._lowAlerts = T_._lowAlerts || []).push({ name: p.name, stock: num_(p.stock), lowStock: num_(p.lowStock) });
+      if (p.business === 'shop' && num_(p.lowStock) > 0 && num_(p.stock) <= lowAt_(p) && !isOn_(p.lowAlerted)) {
+        p.lowAlerted = 1; (T_._lowAlerts = T_._lowAlerts || []).push({ name: p.name, stock: stockTxt_(p), lowStock: num_(p.lowStock) + (isLoose_(p) ? ' pk' : '') });
       }
       update_('Products', p);
     });
@@ -562,7 +600,7 @@ var ACTIONS = {
     var moves = recent_('CashMoves', since).filter(function (m) { return m.shiftId === s.id; }).map(clean_);
     var sales = recent_('Sales', since).filter(function (x) { return x.shiftId === s.id; });
     var ids = {}; sales.forEach(function (x) { ids[x.id] = []; });
-    recent_('SaleItems', since).forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push({ productId: i.productId, name: i.name, qty: i.qty }); });
+    recent_('SaleItems', since).forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit }); });
     var list = sales.slice(-60).reverse().map(function (x) {
       return { id: x.id, ts: x.ts, method: x.method, total: x.total, status: x.status, customerName: x.customerName, userId: x.userId, items: ids[x.id] };
     });
@@ -667,9 +705,10 @@ var ACTIONS = {
         desc.push({ kind: 'i', id: g.id, name: g.name, qty: q, cost: c });
       } else {
         var p = find_('Products', it.refId); if (!p || p.business !== s.business) throw new Error('Product not found');
-        var before = num_(p.stock); p.stock = before + q; if (c > 0) p.cost = c; p.updatedAt = now; update_('Products', p);
+        var add = pieces_(p, q, 'pk');   // bought in packets
+        var before = num_(p.stock); p.stock = before + add; if (c > 0) p.cost = c; p.updatedAt = now; update_('Products', p);
         insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'purchase',
-                              before: before, after: p.stock, diff: q, userName: u.name, note: s.name });
+                              before: before, after: p.stock, diff: add, userName: u.name, note: s.name });
         desc.push({ kind: 'p', id: p.id, name: p.name, qty: q, cost: c });
       }
       total += q * c;
@@ -809,12 +848,13 @@ var ACTIONS = {
     var now = nowIso_(), touched = [];
     table_('SaleItems').rows.filter(function (i) { return i.saleId === s.id; }).forEach(function (i) {
       var p = find_('Products', i.productId); if (!p) return;
-      p.sold = Math.max(0, num_(p.sold) - num_(i.qty));
+      var back = pieces_(p, i.qty, i.unit);
+      p.sold = Math.max(0, Math.round((num_(p.sold) - soldDelta_(p, i.qty, i.unit)) * 100) / 100);
       if (p.business === 'shop') {
-        var before = num_(p.stock); p.stock = before + num_(i.qty);
-        insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'undo', before: before, after: p.stock, diff: num_(i.qty), userName: u.name, note: s.id });
+        var before = num_(p.stock); p.stock = before + back;
+        insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'undo', before: before, after: p.stock, diff: back, userName: u.name, note: s.id });
       }
-      p.updatedAt = now; update_('Products', p); touched.push(p);
+      p.updatedAt = now; update_('Products', p); if (touched.indexOf(p) < 0) touched.push(p);
     });
     var cust = null;
     if (s.method === 'credit' && s.customerId) {
@@ -977,16 +1017,17 @@ var ACTIONS = {
     var already = {};
     table_('Refunds').rows.forEach(function (r) {
       if (r.saleId !== sale.id || r.status === 'rejected') return;
-      JSON.parse(r.items || '[]').forEach(function (x) { already[x.productId] = (already[x.productId] || 0) + num_(x.qty); });
+      JSON.parse(r.items || '[]').forEach(function (x) { var k = x.productId + '|' + (x.unit || ''); already[k] = (already[k] || 0) + num_(x.qty); });
     });
-    var want = d.items && d.items.length ? d.items : items.map(function (i) { return { productId: i.productId, qty: num_(i.qty) - (already[i.productId] || 0) }; });
+    var key = function (x) { return x.productId + '|' + (x.unit === 'pc' ? 'pc' : ''); };   // a packet line and a pieces line of the same item are separate
+    var want = d.items && d.items.length ? d.items : items.map(function (i) { return { productId: i.productId, unit: i.unit, qty: num_(i.qty) - (already[key(i)] || 0) }; });
     var list = [], lineSum = 0, cost = 0;
     want.forEach(function (w) {
       var q = num_(w.qty); if (q <= 0) return;
-      var line = items.filter(function (i) { return i.productId === w.productId; })[0];
+      var line = items.filter(function (i) { return key(i) === key(w); })[0];
       if (!line) throw new Error('Item not in this sale');
-      if (q > num_(line.qty) - (already[line.productId] || 0)) throw new Error('Too many returned for ' + line.name);
-      list.push({ productId: line.productId, name: line.name, qty: q, price: num_(line.price) });
+      if (q > num_(line.qty) - (already[key(line)] || 0)) throw new Error('Too many returned for ' + line.name);
+      list.push({ productId: line.productId, name: line.name, qty: q, price: num_(line.price), unit: line.unit === 'pc' ? 'pc' : '' });
       lineSum += q * num_(line.price); cost += q * num_(line.cost);
     });
     if (!list.length) throw new Error('Nothing left to refund on this sale');
@@ -1009,8 +1050,9 @@ var ACTIONS = {
     var items = JSON.parse(r.items || '[]'), now = nowIso_();
     if (r.business === 'shop') items.forEach(function (x) {
       var p = find_('Products', x.productId); if (!p) return;
-      var before = num_(p.stock); p.stock = before + num_(x.qty); p.sold = Math.max(0, num_(p.sold) - num_(x.qty)); p.updatedAt = now; update_('Products', p);
-      insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'refund', before: before, after: p.stock, diff: num_(x.qty), userName: u.name, note: r.id });
+      var back = pieces_(p, x.qty, x.unit);
+      var before = num_(p.stock); p.stock = before + back; p.sold = Math.max(0, Math.round((num_(p.sold) - soldDelta_(p, x.qty, x.unit)) * 100) / 100); p.updatedAt = now; update_('Products', p);
+      insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'refund', before: before, after: p.stock, diff: back, userName: u.name, note: r.id });
     });
     if (r.method === 'credit' && sale && sale.customerId) {
       var c = find_('Customers', sale.customerId);
@@ -1045,18 +1087,24 @@ var ACTIONS = {
       need_(u, 'manageProducts');
       p = { id: d.id || uid_('P'), business: biz, name: name, barcode: barcode, category: str_(d.category, 40), price: num_(d.price), cost: num_(d.cost),
             stock: biz === 'shop' ? num_(d.stock) : '', lowStock: d.lowStock === '' || d.lowStock === undefined ? num_(setting_('defaultLowStock')) : num_(d.lowStock),
-            expiry: str_(d.expiry, 10), active: 1, fav: isOn_(d.fav) ? 1 : 0, sold: 0, updatedAt: now };
+            expiry: str_(d.expiry, 10), active: 1, fav: isOn_(d.fav) ? 1 : 0, sold: 0, updatedAt: now, loose: '', perPack: '', looseTable: '' };
+      setLoose_(p, d);
       insert_('Products', p);
       if (biz === 'shop' && num_(p.stock)) insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: biz, productId: p.id, name: p.name, type: 'new', before: 0, after: p.stock, diff: p.stock, userName: u.name, note: '' });
       audit_(u, 'prod.add', { name: name, price: p.price });
     } else {
-      var priceChange = num_(d.price) !== num_(p.price) || (d.cost !== undefined && num_(d.cost) !== num_(p.cost));
+      var lz = { loose: p.loose, perPack: p.perPack, looseTable: p.looseTable }; if (d.loose !== undefined) setLoose_(lz, Object.assign({ business: biz }, d));
+      var looseChange = String(lz.loose) !== String(p.loose) || String(lz.perPack) !== String(p.perPack);
+      var priceChange = num_(d.price) !== num_(p.price) || (d.cost !== undefined && num_(d.cost) !== num_(p.cost)) || String(lz.looseTable) !== String(p.looseTable);
+      if (looseChange) need_(u, 'manageProducts');
       if (priceChange) need_(u, 'changePrices');
       if (!priceChange && !can_(u, 'manageProducts') && !can_(u, 'changePrices')) need_(u, 'manageProducts');
       var log = { name: p.name };
       if (priceChange) { log.oldPrice = p.price; log.newPrice = num_(d.price); }
       p.name = name; p.barcode = barcode; p.price = num_(d.price);
       if (d.cost !== undefined) p.cost = num_(d.cost);
+      p.loose = lz.loose; p.perPack = lz.perPack; p.looseTable = lz.looseTable;
+      if (looseChange) log.loose = isOn_(p.loose) ? 'on (' + p.perPack + ' pcs)' : 'off';
       if (can_(u, 'manageProducts')) {
         p.category = str_(d.category, 40); p.lowStock = num_(d.lowStock); p.expiry = str_(d.expiry, 10);
         if (d.active !== undefined) p.active = isOn_(d.active) ? 1 : 0;
@@ -1336,10 +1384,11 @@ function receivePo_(u, po, s, lines) {
       insert_('IngLog', { id: uid_('IL'), ts: now, date: today_(), ingredientId: g.id, name: g.name, type: 'purchase', qty: num_(it.qty), userName: u.name, note: po.poNo });
     } else {
       var p = find_('Products', it.refId); if (!p) return;
-      var before = num_(p.stock); if (p.business === 'shop') p.stock = before + num_(it.qty);
+      var add = pieces_(p, it.qty, 'pk');   // ordered in packets
+      var before = num_(p.stock); if (p.business === 'shop') p.stock = before + add;
       if (num_(it.cost) > 0) p.cost = num_(it.cost); p.updatedAt = now; update_('Products', p);
       if (p.business === 'shop') insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'purchase',
-                                   before: before, after: p.stock, diff: num_(it.qty), userName: u.name, note: po.poNo });
+                                   before: before, after: p.stock, diff: add, userName: u.name, note: po.poNo });
     }
   });
   if (num_(po.paid) > total) throw new Error('Paid amount is more than the received total');
@@ -1348,6 +1397,18 @@ function receivePo_(u, po, s, lines) {
                          method: '', items: items, userName: u.name, note: po.poNo, ref: po.id });
   if (s) supBalance_(s);
   audit_(u, 'po.receive', { po: po.poNo, total: total });
+}
+
+// Reads the "sell loose" fields sent by the product form into product p.
+function setLoose_(p, d) {
+  var on = isOn_(d.loose) && (d.business || p.business) === 'shop';
+  if (!on) { p.loose = ''; return p; }
+  var per = Math.floor(num_(d.perPack)); if (per < 2 || per > 1000) throw new Error('Pieces in one packet must be 2 or more');
+  var tab = (Array.isArray(d.looseTable) ? d.looseTable : []).map(function (r) { return [Math.floor(num_(r[0])), Math.round(num_(r[1]))]; })
+    .filter(function (r) { return r[0] > 0 && r[0] < per && r[1] > 0; });
+  var seen = {}; tab = tab.filter(function (r) { if (seen[r[0]]) return false; seen[r[0]] = 1; return true; }).sort(function (a, b) { return a[0] - b[0]; });
+  p.loose = 1; p.perPack = per; p.looseTable = JSON.stringify(tab);
+  return p;
 }
 
 function addExpense_(u, biz, cat, amt, method, ref, note, id, more) {
@@ -1425,8 +1486,9 @@ function report_(u, d) {
   });
   table_('SaleItems').rows.forEach(function (i) {
     if (!saleIds[i.saleId]) return;
-    var it = items[i.productId] || (items[i.productId] = { productId: i.productId, name: i.name, business: i.business, qty: 0, revenue: 0, profit: 0 });
-    it.qty += num_(i.qty); it.revenue += num_(i.lineTotal); it.profit += num_(i.lineTotal) - num_(i.cost) * num_(i.qty);
+    var it = items[i.productId] || (items[i.productId] = { productId: i.productId, name: i.name, business: i.business, qty: 0, pcs: 0, revenue: 0, profit: 0 });
+    if (i.unit === 'pc') it.pcs += num_(i.qty); else it.qty += num_(i.qty);
+    it.revenue += num_(i.lineTotal); it.profit += num_(i.lineTotal) - num_(i.cost) * num_(i.qty);
   });
   table_('Refunds').rows.forEach(function (r) {
     if (r.status !== 'approved' || biz.indexOf(r.business) < 0) return;
@@ -1453,7 +1515,7 @@ function report_(u, d) {
 
   var warn = num_(setting_('expiryWarnDays')), lim = Utilities.formatDate(new Date(Date.now() + warn * 86400000), TZ, 'yyyy-MM-dd');
   var prods = table_('Products').rows.filter(function (p) { return biz.indexOf(p.business) >= 0 && isOn_(p.active); });
-  var lowStock = prods.filter(function (p) { return p.business === 'shop' && num_(p.stock) <= num_(p.lowStock); }).map(function (p) { return { id: p.id, name: p.name, stock: num_(p.stock), lowStock: num_(p.lowStock) }; });
+  var lowStock = prods.filter(function (p) { return p.business === 'shop' && num_(p.stock) <= lowAt_(p); }).map(function (p) { return { id: p.id, name: p.name, stock: num_(p.stock), lowStock: num_(p.lowStock), stockTxt: stockTxt_(p), loose: isLoose_(p) ? 1 : 0 }; });
   var expiring = prods.filter(function (p) { return p.expiry && String(p.expiry) <= lim; }).map(function (p) { return { id: p.id, name: p.name, expiry: p.expiry, expired: String(p.expiry) < today_(), stock: p.stock }; });
   var lowIng = biz.indexOf('food') >= 0 ? table_('Ingredients').rows.filter(function (g) { return isOn_(g.active) && num_(g.stock) <= num_(g.lowLevel); }).map(clean_) : [];
   var debts = table_('Customers').rows.filter(function (c) { return biz.indexOf(c.business) >= 0 && num_(c.balance) > 0; })
@@ -1474,12 +1536,14 @@ function report_(u, d) {
   var undone = table_('Sales').rows.filter(function (x) { return inR(x) && GONE[x.status]; })
     .map(function (x) { return { id: x.id, ts: x.ts, userName: x.userName, total: num_(x.total), method: x.method, status: x.status, undoneBy: x.undoneBy, reason: x.undoReason }; });
   var top = Object.keys(items).map(function (k) { var i = items[k]; if (!profitOk) delete i.profit; return i; });
+  var looseSales = top.filter(function (i) { return i.pcs > 0; }).sort(function (a, b) { return b.revenue - a.revenue; });
   return {
     ok: true, from: from, to: to, business: biz, byBiz: byBiz, totals: totals,
     days: Object.keys(days).sort().map(function (k) { return days[k]; }),
     employees: Object.keys(emp).map(function (k) { return emp[k]; }).sort(function (a, b) { return b.total - a.total; }),
     topItems: top.sort(function (a, b) { return b.revenue - a.revenue; }).slice(0, 20),
-    slowItems: prods.filter(function (p) { return !items[p.id]; }).slice(0, 20).map(function (p) { return { id: p.id, name: p.name, stock: p.stock }; }),
+    slowItems: prods.filter(function (p) { return !items[p.id]; }).slice(0, 20).map(function (p) { return { id: p.id, name: p.name, stock: p.stock, stockTxt: stockTxt_(p) }; }),
+    looseSales: looseSales,
     expenses: Object.keys(expCats).map(function (k) { return expCats[k]; }),
     lowStock: lowStock, lowIngredients: lowIng, expiring: expiring, debts: debts, totalDebt: debts.reduce(function (a, c) { return a + c.balance; }, 0),
     suppliersOwed: supOwed, balances: balances, shifts: shifts, cashMoves: cashMoves, undone: undone,
@@ -1689,7 +1753,7 @@ function sendLowStock_(items, scheduled) {
   if (!scheduled && setting_('lowStockMode') === 'daily') return;   // daily mode: the list goes out once a day instead
   var rs = recipientsFor_('lowStock'); if (!rs.length) return;
   var subj = items.length === 1 ? 'Low stock: ' + items[0].name + ' — ' + items[0].stock + ' left' : 'Low stock: ' + items.length + ' items need ordering';
-  var rows = items.map(function (x) { return '<tr><td style="padding:8px;border-bottom:1px solid #eee">' + esc_(x.name) + '</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#C62828;font-weight:bold">' + fmt_(x.stock) + ' left</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#888">warn at ' + fmt_(x.lowStock) + '</td></tr>'; }).join('');
+  var rows = items.map(function (x) { return '<tr><td style="padding:8px;border-bottom:1px solid #eee">' + esc_(x.name) + '</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#C62828;font-weight:bold">' + (typeof x.stock === 'number' ? fmt_(x.stock) : esc_(x.stock)) + ' left</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:#888">warn at ' + (typeof x.lowStock === 'number' ? fmt_(x.lowStock) : esc_(x.lowStock)) + '</td></tr>'; }).join('');
   var html = emailWrap_('Low stock', '<table style="width:100%;border-collapse:collapse;font-size:15px">' + rows + '</table><p>Make a purchase order in Saado POS → More → Purchasing → "Add low-stock items".</p>');
   MailApp.sendEmail({ to: rs.map(function (r) { return r.email; }).join(','), subject: subj, htmlBody: html, name: 'Saado POS' });
 }
@@ -1730,8 +1794,8 @@ function emailTick() {
 }
 function lowStockNow_() {
   return table_('Products').rows.filter(function (p) {
-    return isOn_(p.active) && !isOn_(p.deleted) && p.business === 'shop' && num_(p.lowStock) > 0 && num_(p.stock) <= num_(p.lowStock);
-  }).map(function (p) { return { name: p.name, stock: num_(p.stock), lowStock: num_(p.lowStock) }; });
+    return isOn_(p.active) && !isOn_(p.deleted) && p.business === 'shop' && num_(p.lowStock) > 0 && num_(p.stock) <= lowAt_(p);
+  }).map(function (p) { return { name: p.name, stock: stockTxt_(p), lowStock: num_(p.lowStock) + (isLoose_(p) ? ' pk' : '') }; });
 }
 // Old timer name (from v1.2.0) still works.
 function dailyEmails() { emailTick(); }
@@ -1773,7 +1837,7 @@ function reportEmailHtml_(title, r, kind) {
   });
   if (sh.length && kind === 'daily') h += '<h3 style="color:#003366;font-size:15px;margin:18px 0 6px">Shifts</h3><div style="font-size:14px;line-height:1.7">' + sh.join('<br>') + '</div>';
   var att = [];
-  if (r.lowStock.length) att.push('Low stock: ' + r.lowStock.slice(0, 12).map(function (p) { return esc_(p.name) + ' (' + fmt_(p.stock) + ')'; }).join(', '));
+  if (r.lowStock.length) att.push('Low stock: ' + r.lowStock.slice(0, 12).map(function (p) { return esc_(p.name) + ' (' + esc_(p.stockTxt || fmt_(p.stock)) + ')'; }).join(', '));
   if ((r.undone || []).length) att.push('Undone sales: ' + r.undone.length + ' (' + r.undone.slice(0, 5).map(function (x) { return esc_(x.userName) + ', “' + esc_(x.reason) + '”'; }).join('; ') + ')');
   if (r.pendingRefunds) att.push('Refund requests waiting: ' + r.pendingRefunds);
   if (r.openOrders) att.push('Purchase orders waiting for delivery: ' + r.openOrders);

@@ -6,6 +6,7 @@ window.GUIDE = {
 <h4>2. Bilow wareegga</h4><ol><li>Taabo <b>Wareeg</b> (hoose).</li><li>Tiri lacagta khasnadda, eeg haraaga Zaad iyo Edahab, geli.</li><li>Taabo <b>Bilow wareegga</b>. Hadda waad iibin kartaa.</li></ol>
 <h4>3. Iibi</h4><ol><li>Taabo alaabta (badhamada waaweyn), ama sawir baarkoodka, ama qor magaca.</li>
 <li>Alaab badan: fur kamaradda oo sii wad sawirka — cod kasta hal shay ayuu ku darayaa.</li>
+<li>Alaabta leh <b>XABBO</b> (tusaale sigaar): taabo, kadib dooro <b>1 baakad</b> ama tirada xabbada (1, 2, 3…). Qiimaha si toos ah ayaa loo xisaabiyaa.</li>
 <li>Taabo <b>Bixi</b>. Dooro <b>Caddaan / Zaad / Edahab / Deyn</b>.</li>
 <li>Caddaan: geli lacagta uu bixiyey (SH ama USD) — baaqiga waxaa lagu tusayaa SH.</li>
 <li>Zaad / Edahab: macmiilka tus lambarka akoonka. Hubi in lacagtu timid.</li>
@@ -28,6 +29,7 @@ window.GUIDE = {
 <li>Soo koobidda maalinta waxay kuu imaanaysaa <b>iimayl</b> (eeg "Warbixinnada iimaylka").</li></ul>
 <h4>Alaabta</h4><ul>
 <li><b>Wax kale → Alaabta → + Alaab cusub</b>. Baarkoodka ku sawir kamaradda. Calaamadda xiddigta = had iyo jeer ka muuji shaashadda iibka.</li>
+<li><b>Iibi xabbo xabbo</b> (sigaar iwm.): fur alaabta → daar <b>Iibi xabbo xabbo</b> → qor tirada xabbada hal baakad (20) iyo liiska qiimaha (1 = 1,000, 2 = 2,000, 3 = 2,500 …). Qiimaha baakaddu waa "Qiimaha iibka", qiimaha iibsiguna waa hal baakad. Kaydka waxaa lagu tiriyaa xabbo oo waxaa loo muujiyaa "4 baakad + 7 xabbo". Iibsiga alaab-keenaha waa baakado. Alaabta kale ha daarin.</li>
 <li>Alaab badan: <b>Soo geli CSV / Excel</b>. Marka hore <b>Soo deji tusaalaha</b>, ku buuxi Excel, kadib soo geli. Baarkood isku mid ah = waa la cusboonaysiinayaa.</li>
 <li><b>Tirinta kaydka</b>: sawir shay kasta, qor tirada dhabta ah, kaydi.</li></ul>
 <h4>Iibsiga (Dalabka iibsiga iyo alaab-keenayaasha)</h4><ol>
@@ -57,6 +59,7 @@ window.GUIDE = {
 <h4>2. Start your shift</h4><ol><li>Tap <b>Shift</b> (bottom bar).</li><li>Count the cash drawer, check the Zaad and Edahab balances, type them in.</li><li>Tap <b>Start shift</b>. Now you can sell.</li></ol>
 <h4>3. Sell</h4><ol><li>Tap items (big buttons), or scan the barcode, or type the name.</li>
 <li>Many items: open the camera and keep scanning — each beep adds one item.</li>
+<li>Items marked <b>LOOSE</b> (e.g. cigarettes): tap, then choose <b>1 packet</b> or the number of pieces (1, 2, 3…). The price is worked out for you.</li>
 <li>Tap <b>Pay</b>. Choose <b>Cash / Zaad / Edahab / Credit</b>.</li>
 <li>Cash: type what the customer gave (SH or USD) — change is shown in SH.</li>
 <li>Zaad / Edahab: show the customer the account number. Check the money arrived.</li>
@@ -79,6 +82,7 @@ window.GUIDE = {
 <li>The daily summary comes by <b>email</b> (see "Email reports").</li></ul>
 <h4>Products</h4><ul>
 <li><b>More → Products → + New product</b>. Scan the barcode with the camera. The star = always show on the sell screen.</li>
+<li><b>Sell loose (pieces)</b> (cigarettes etc.): open the product → switch on <b>Sell loose</b> → type the pieces in one packet (20) and the price list (1 = 1,000, 2 = 2,000, 3 = 2,500 …). The selling price is the packet price, and the cost is for one packet. Stock is counted in pieces and shown as "4 pk + 7 pcs". Supplier purchases stay in packets. Leave it off for everything else.</li>
 <li>Many products: <b>Import CSV / Excel</b>. First <b>Download template</b>, fill it in Excel, then import. Same barcode = updated, not duplicated.</li>
 <li><b>Stock count</b>: scan each item, type the real count, save.</li></ul>
 <h4>Purchasing (purchase orders and suppliers)</h4><ol>

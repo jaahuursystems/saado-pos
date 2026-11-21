@@ -10,8 +10,9 @@ from playwright.sync_api import sync_playwright, expect
 BASE = 'http://localhost:8787'
 SHOTS = '/tmp/shots/'
 pins = json.load(urllib.request.urlopen(BASE + '/__pins'))
-urllib.request.urlopen(BASE + '/__time?t=' + time.strftime('%Y-%m-%d', time.gmtime()) + 'T15:00:00Z')  # today 18:00 in Hargeisa: both businesses open
-sheet = lambda n: [r for r in json.load(urllib.request.urlopen(BASE + '/__sheet?name=' + n))[1:] if r and r[0]]
+TEST_NOW = time.strftime('%Y-%m-%d', time.gmtime(time.time() + 3 * 3600)) + 'T15:00:00Z'
+urllib.request.urlopen(BASE + '/__time?t=' + TEST_NOW)  # today 18:00 in Hargeisa: both businesses open
+sheet = lambda n, header=False: [r for r in json.load(urllib.request.urlopen(BASE + '/__sheet?name=' + n))[(0 if header else 1):] if r and r[0]]
 errors, results = [], []
 
 def step(name):
@@ -36,6 +37,8 @@ with sync_playwright() as p:
     b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox'])
     ctx = b.new_context(viewport={'width': 393, 'height': 851}, device_scale_factor=2, is_mobile=True, has_touch=True)
     page = ctx.new_page()
+    # the phone's clock = the server's test clock (18:00 in Hargeisa), so the test works at any real time of day
+    page.clock.install(time=TEST_NOW)
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' and 'favicon' not in m.text else None)
 
@@ -58,6 +61,20 @@ with sync_playwright() as p:
         page.click('.fab'); page.fill('[name=name]', name); page.fill('[name=barcode]', code); page.fill('[name=price]', price); page.fill('[name=cost]', cost); page.fill('[name=stock]', stock)
         page.click('.ft .btn.gold'); page.wait_for_selector(f'#pl .name:has-text("{name}")'); page.wait_for_selector('.ov', state='detached')
     page.screenshot(path=SHOTS + '03-products.png'); step('owner adds 3 shop products')
+    # cigarettes sold loose: 20 pieces in a packet, 1 = 1,000 · 2 = 2,000 · 3 = 2,500
+    page.click('.fab'); page.fill('[name=name]', 'Beensal'); page.fill('[name=price]', '16000'); page.fill('[name=cost]', '14000')
+    assert page.locator('#lzb .ptab').count() == 0
+    page.click('.lzcard input.sw'); page.wait_for_selector('#lzt tr[data-i="0"]')
+    page.fill('#lzt tr[data-i="0"] [data-k=p]', '1000')
+    for i, (q, pr) in enumerate([('2', '2000'), ('3', '2500')], start=1):
+        page.click('#lzadd'); page.fill(f'#lzt tr[data-i="{i}"] [data-k=q]', q); page.fill(f'#lzt tr[data-i="{i}"] [data-k=p]', pr)
+    page.fill('[name=stockPk]', '4'); page.fill('[name=stockPc]', '7'); page.fill('[name=lowStock]', '1')
+    page.locator('#lzt').click(position={'x': 5, 'y': 5}); page.wait_for_timeout(150)
+    page.screenshot(path=SHOTS + '03b-loose-form.png', full_page=True)
+    page.click('.ft .btn.gold'); page.wait_for_selector('#pl .name:has-text("Beensal")'); page.wait_for_selector('.ov', state='detached')
+    row = [r for r in sheet('Products') if 'Beensal' in r][0]; hdr = sheet('Products', header=True)[0]
+    P = dict(zip(hdr, row)); assert P['loose'] in ('1', 1) and str(P['perPack']) == '20' and str(P['stock']) == '87' and json.loads(P['looseTable']) == [[1, 1000], [2, 2000], [3, 2500]], P
+    assert '4 baakad + 7 xabbo' in page.inner_text('#pl'), page.inner_text('#pl'); step('owner switches on "sell loose" for Beensal (20 pcs, price list, stock 4 pk + 7 pcs)')
     page.click('.bizswitch button[data-b="food"]'); page.wait_for_timeout(300)
     page.goto(BASE + '/#products'); page.wait_for_selector('.fab')
     for name, price, cost in [('Digaag buuxa', '60000', '35000'), ('Chips', '15000', '6000'), ('Shawarma', '25000', '12000')]:
@@ -165,6 +182,19 @@ with sync_playwright() as p:
     perm = page.evaluate("""async () => { try { await App.api('refund.decide', {id: 'x', approve: true}); return 'allowed' } catch (e) { return e.message } }""")
     assert 'permission' in perm.lower() or 'oggolaansho' in perm.lower(), perm; step('employee cannot approve refunds')
 
+    # ---------- selling loose pieces ----------
+    page.goto(BASE + '/#sell'); page.wait_for_selector('.tile:has-text("Beensal") .lz')
+    page.click('.tile:has-text("Beensal")'); page.wait_for_selector('.qgrid'); page.click('.qb[data-n="3"]')
+    assert '2,500' in page.inner_text('#lzt'); page.fill('#lzn', '9'); assert '7,500' in page.inner_text('#lzt'), page.inner_text('#lzt')   # 9 = 3+3+3 from this short list
+    page.click('.qb[data-n="3"]'); page.screenshot(path=SHOTS + '05c-loose-pick.png'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.ov', state='detached')
+    page.click('.tile:has-text("Beensal")'); page.click('#pkBtn'); page.wait_for_selector('.ov', state='detached')
+    assert '18,500' in page.inner_text('.cartbar'), page.inner_text('.cartbar')
+    page.click('#openCart'); page.wait_for_selector('#cl .lz'); page.screenshot(path=SHOTS + '05d-loose-cart.png'); page.click('.ov .ft .btn.gold')
+    page.wait_for_selector('#tend'); page.click('[data-name=method] button[data-v="zaad"]'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    items = sheet('SaleItems')[-2:]; assert items[0][-1] == 'pc' and str(items[0][5]) == '3' and str(items[0][8]) == '2500' and items[1][-1] == '', items
+    P = dict(zip(sheet('Products', header=True)[0], [r for r in sheet('Products') if 'Beensal' in r][0])); assert str(P['stock']) == '64', P['stock']
+    step('sold 3 loose pieces (2,500) + 1 packet (16,000); stock 87 → 64 pieces')
     # ---------- undo a sale in my shift ----------
     page.goto(BASE + '/#sell'); page.click('.tile:has-text("Coca-Cola")'); page.click('#payBtn'); page.wait_for_selector('#tend'); page.click('.ft .btn.gold'); page.wait_for_selector('.toast.ok')
     page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
