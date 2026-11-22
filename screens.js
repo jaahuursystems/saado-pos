@@ -317,7 +317,7 @@
   // Expected money per account and currency. srv = totals from the server (or null); queued items still on this phone are added.
   function liveTotals(sh, srv, moves) {
     const k0 = ['cashInSH', 'cashInUSD', 'zaadInSH', 'zaadInUSD', 'edInSH', 'edInUSD', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'expCashUSD', 'expZaadUSD', 'expEdUSD', 'refCash', 'refZaad', 'refEd',
-      'cashOutSH', 'cashOutUSD', 'cashSales', 'zaadSales', 'edSales', 'creditSales', 'saleCount', 'undoneCount',
+      'cashOutSH', 'cashOutUSD', 'zaadOutSH', 'zaadOutUSD', 'edOutSH', 'edOutUSD', 'cashSales', 'zaadSales', 'edSales', 'creditSales', 'saleCount', 'undoneCount',
       'excashSH', 'excashUSD', 'exzaadSH', 'exzaadUSD', 'exedSH', 'exedUSD', 'exCount', 'exFees'];
     const x = {}; k0.forEach(k => x[k] = srv ? num(srv[k]) : 0);
     let waiting = 0;
@@ -337,7 +337,7 @@
         else x[k + 'InSH'] += tot;
       } else if (o.action === 'cust.pay' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['custPay' + k] += num(o.data.amount); waiting++; } }
       else if (o.action === 'exp.create' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['exp' + k + (o.data.currency === 'USD' ? 'USD' : '')] += num(o.data.amount); waiting++; } }
-      else if (o.action === 'cash.out') { x[o.data.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num(o.data.amount); waiting++; }
+      else if (o.action === 'cash.out') { const k = o.data.account === 'zaad' ? 'zaadOut' : o.data.account === 'edahab' ? 'edOut' : 'cashOut'; x[k + (o.data.currency === 'USD' ? 'USD' : 'SH')] += num(o.data.amount); waiting++; }
       else if (o.action === 'exch.create') {
         const d = o.data, acct = d.account === 'edahab' ? 'ed' : 'zaad', rIn = d.dir === 'out' ? 'cash' : acct, gOut = d.dir === 'out' ? acct : 'cash';
         x['ex' + rIn + (d.recvCur === 'USD' ? 'USD' : 'SH')] += num(d.recvAmount); x['ex' + gOut + (d.giveCur === 'USD' ? 'USD' : 'SH')] -= num(d.giveAmount); x.exCount++; waiting++;
@@ -346,8 +346,8 @@
     const r2 = v => Math.round(v * 100) / 100;
     x.eCashSH = num(sh.openCash) + x.cashInSH + x.custPayCash - x.expCash - x.refCash - x.cashOutSH + x.excashSH;
     x.eCashUSD = r2(num(sh.openCashUSD) + x.cashInUSD - x.cashOutUSD - x.expCashUSD + x.excashUSD);
-    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad + x.exzaadSH; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD - x.expZaadUSD + x.exzaadUSD);
-    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd + x.exedSH; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD - x.expEdUSD + x.exedUSD);
+    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad + x.exzaadSH - x.zaadOutSH; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD - x.expZaadUSD + x.exzaadUSD - x.zaadOutUSD);
+    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd + x.exedSH - x.edOutSH; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD - x.expEdUSD + x.exedUSD - x.edOutUSD);
     x.totalSH = x.eCashSH + x.eZaadSH + x.eEdSH; x.totalUSD = r2(x.eCashUSD + x.eZaadUSD + x.eEdUSD);
     x.waiting = waiting; x.rate = num(sh.rate) || A.rate();
     return x;
@@ -376,7 +376,7 @@
     } else {
       main.innerHTML = `<div class="card navy"><div class="row"><div class="grow"><div class="small muted">${esc(t('Expected in the drawer now'))}</div><div class="big" id="expNow" style="color:var(--gold)">…</div></div>
           <span class="pill green">${esc(t('Open'))}</span></div><div class="small muted" style="margin-top:4px">${esc(t('Started'))} ${A.when(sh.openTs)}</div></div>
-        ${can('cashOut') || can('exchange') ? `<div class="grid2" style="margin-bottom:6px">${can('cashOut') ? `<button class="btn block" id="co">${I('wallet')}${esc(t('Take cash out'))}</button>` : ''}${can('exchange') ? `<button class="btn gold block" id="exb">${I('swap')}${esc(t('Exchange'))}</button>` : ''}</div>` : ''}
+        ${can('cashOut') || can('exchange') ? `<div class="grid2" style="margin-bottom:6px">${can('cashOut') ? `<button class="btn block" id="co">${I('wallet')}${esc(t('Take money out'))}</button>` : ''}${can('exchange') ? `<button class="btn gold block" id="exb">${I('swap')}${esc(t('Exchange'))}</button>` : ''}</div>` : ''}
         <div id="exch"></div><div id="moves"></div><div id="mysales"></div>
         <div class="card" id="endc"><h3 style="margin-top:0">${esc(t('End shift — count and type'))}</h3><div id="cmp"></div>
           <label class="f" style="margin-top:10px"><span>${esc(t('Note'))}</span><input class="in" name="note" id="cnote"></label>
@@ -399,8 +399,7 @@
       $('#expNow').innerHTML = srv || !S.online || S.queue.some(o => o.data && o.data.id === sh.id) ? esc(money(x.eCashSH) + (x.eCashUSD ? ' · ' + usdF(x.eCashUSD) : '')) : '<span class="skel" style="display:inline-block;width:150px;height:30px;margin:0;opacity:.35"></span>';
       const qMoves = S.queue.filter(o => o.action === 'cash.out' && o.data.business === sh.business).map(o => Object.assign({ pending: 1, ts: o.ts, userName: o.userName }, o.data));
       const allMoves = moves.concat(qMoves);
-      $('#moves').innerHTML = allMoves.length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${allMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div>
-        <div class="sub">${m.pending ? esc(t('Waiting to send')) : A.when(m.ts)} · ${esc(t(m.reason || ''))}${m.userName ? ' · ' + esc(t('recorded by {n}', { n: m.userName })) : ''}</div></div></div>`).join('')}</div>` : '';
+      drawMoves(sh, allMoves);
       drawExchanges(sh, (r && r.exchanges) || [], x);
       drawCompare(sh, x);
       drawMySales(sh, (r && r.sales) || []);
@@ -499,6 +498,49 @@
       } }] });
     $$('#rs .chip', sh.el).forEach(c => c.onclick = () => { reason = c.dataset.r; $$('#rs .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); });
   }
+  /* ---------- Take money out: list (with undo) and form ---------- */
+  const WHO_ICON = { owner: 'star', customer: 'user', supplier: 'truck', other: 'dots' };
+  function moveRow(m, undoBtn) {
+    const gone = m.status === 'undone', acc = A.methodName(m.account || 'cash'), wt = m.whoType || 'other';
+    const what = wt === 'customer' ? t('Added to their balance') : wt === 'supplier' ? t('Paid supplier') : t(m.reason || '');
+    return `<div class="li lead mv ${gone ? 'gone' : ''}" data-id="${esc(m.id)}"><span class="av ${wt === 'customer' ? 'amber' : wt === 'supplier' ? 'green' : 'gold'}">${I(WHO_ICON[wt] || 'wallet')}</span>
+      <div class="main"><div class="name ${gone ? 'strike' : ''}">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)} · ${esc(acc)}${gone ? ` <span class="pill red">${esc(t('Undone'))}</span>` : ''}</div>
+      <div class="sub">${m.pending ? esc(t('Waiting to send')) : A.when(m.ts)} · ${esc(what)}${m.note ? ' · ' + esc(m.note) : ''}${m.userName ? ' · ' + esc(t('recorded by {n}', { n: m.userName })) : ''}</div>
+      ${gone ? `<div class="sub red">${esc(t('Undone by {n}: {r}', { n: m.undoneBy || '', r: t(m.undoReason || '') }))}</div>` : ''}</div>
+      ${undoBtn && !gone ? `<button class="btn sm text" data-mvu>${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div>`;
+  }
+  function drawMoves(sh, list) {
+    const box = $('#moves'); if (!box) return;
+    if (!list.length) { box.innerHTML = ''; return; }
+    const sum = {}; list.filter(m => m.status !== 'undone').forEach(m => { const k = (m.account || 'cash').toUpperCase() + (m.currency === 'USD' ? ' USD' : ''); sum[k] = (sum[k] || 0) + num(m.amount); });
+    box.innerHTML = `<h3>${esc(t('Money taken out'))}</h3><div class="list">${list.map(m => moveRow(m, m.pending || m.userName === S.user.name || isOwner())).join('')}</div>
+      ${Object.keys(sum).length ? `<div class="eff">${Object.keys(sum).map(k => `<div><small>${esc(t(k.replace('EDAHAB', 'EDAHAB')))}</small><b class="dn">−${/USD/.test(k) ? usdF(sum[k]) : fmt(sum[k])}</b></div>`).join('')}</div>` : ''}`;
+    $$('#moves [data-mvu]').forEach(b => b.onclick = () => moveUndo(list.find(m => m.id === b.closest('[data-id]').dataset.id), () => loadLive(sh, true)));
+  }
+  function moveUndo(m, done) {
+    if (!m) return;
+    const reasons = ['Wrong amount', 'Wrong person', 'Entered twice', 'Not taken after all'];
+    sheet({ title: t('Undo money taken out'), body: `<p style="margin-top:0"><b>${esc(m.takenBy)}</b> · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)} · ${esc(A.methodName(m.account || 'cash'))}</p>
+        <label class="f"><span>${esc(t('Why'))}</span><div class="chips" id="rs">${reasons.map(r => `<button type="button" class="chip" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
+        <p class="small muted">${esc(m.whoType === 'customer' ? t('The money goes back into the expected total, and it comes off the customer’s balance. The record stays, marked “undone”.')
+          : m.whoType === 'supplier' ? t('The money goes back into the expected total, and we owe the supplier that amount again. The record stays, marked “undone”.')
+          : t('The money goes back into the expected total. The record stays, marked “undone”.'))}</p>`,
+      onOpen: el => $$('#rs .chip', el).forEach(c => c.onclick = () => $$('#rs .chip', el).forEach(x => x.classList.toggle('on', x === c))),
+      actions: [{ label: t('Back') }, { label: t('Undo'), cls: 'red', onClick: async (close, el) => {
+        const on = $('#rs .chip.on', el); if (!on) throw new Error(t('Choose a reason'));
+        const qi = S.queue.findIndex(o => o.action === 'cash.out' && o.data.id === m.id);
+        if (qi >= 0) {   // still on this phone: take it out and put the local balance back
+          const d = S.queue[qi].data; S.queue.splice(qi, 1); A.LS.set('queue', S.queue);
+          if (d.whoType === 'customer') { const c = (S.data.customers || []).find(x => x.id === d.refId); if (c) { c.balance = num(c.balance) - shOf(d); A.saveData(); } }
+        } else {
+          needOnline(); const r = await api('cash.undo', { id: m.id, reason: on.dataset.r });
+          if (r.customer) A.upsert('customers', r.customer); if (r.supplier) A.upsert('suppliers', r.supplier);
+        }
+        close(); toast(t('Undone'), 'ok'); done && done();
+      } }] });
+  }
+  const shOf = d => d.currency === 'USD' ? Math.round(num(d.amount) * A.rate()) : num(d.amount);
+
   /* ---------- Exchange: Zaad/Edahab <-> cash, no sale ---------- */
   const exAmt = (v, cur) => cur === 'USD' ? usdF(v) : money(v);
   function exTitle(x) {
@@ -569,23 +611,77 @@
   }
   function cashOutSheet(done) {
     const owners = A.LS.get('names', []).filter(u => u.business === 'both').map(u => u.name);
-    let who = owners[0] || '', reason = 'Owner took', cur = 'SH';
-    const reasons = ['Owner took', 'Bank / Zaad deposit', 'Pay a supplier', 'Other'];
-    const sh = sheet({ title: t('Take cash out'), body: `<label class="f"><span>${esc(t('Amount'))}</span><div class="row"><input class="in big grow" name="amt" inputmode="decimal" autofocus placeholder="0">
-        <div class="seg" id="ccur" style="flex:0 0 150px;flex-wrap:nowrap"><button data-v="SH" class="on">SH</button><button data-v="USD">USD</button></div></div></label>
-      <label class="f"><span>${esc(t('Who took it'))}</span><div class="chips" id="who">${owners.map((n, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-w="${esc(n)}">${esc(n)}</button>`).join('')}<button class="chip ${owners.length ? '' : 'on'}" data-w="">${esc(t('Other…'))}</button></div>
-        <input class="in ${owners.length ? 'hidden' : ''}" id="whoO" placeholder="${esc(t('Name'))}" style="margin-top:8px"></label>
-      <label class="f"><span>${esc(t('Why'))}</span><div class="chips" id="why">${reasons.map((r, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
-      ${input('note', t('Note'), '')}<p class="small muted">${esc(t('Expected cash goes down by this amount. The owner sees who took what and when.'))}</p>`,
+    let account = 'cash', cur = 'SH', whoType = 'owner', who = owners[0] || '', reason = 'Owner took', pick = null;
+    const custs = () => (S.data.customers || []).filter(c => c.business === S.biz && num(c.active) !== 0);
+    const sups = () => (S.data.suppliers || []).filter(c => c.business === S.biz && num(c.active) !== 0);
+    const sh = sheet({ title: t('Take money out'), body: `
+      <label class="f"><span>${esc(t('Taken from'))}</span><div class="seg" id="cacc"><button data-v="cash" class="on">${esc(A.methodName('cash'))}</button><button data-v="zaad">Zaad</button><button data-v="edahab">Edahab</button></div></label>
+      <label class="f"><span>${esc(t('Amount'))}</span><div class="row"><input class="in big grow" name="amt" inputmode="decimal" autofocus placeholder="0">
+        <div class="seg" id="ccur" style="flex:0 0 130px;flex-wrap:nowrap"><button data-v="SH" class="on">SH</button><button data-v="USD">USD</button></div></div></label>
+      <label class="f"><span>${esc(t('Who took it'))}</span><div class="who" id="wt">${[['owner', 'Owner', 'star'], ['customer', 'Customer', 'user'], ['supplier', 'Supplier', 'truck'], ['other', 'Other', 'dots']].map(([k, l, ic]) => `<button type="button" data-w="${k}" class="${k === 'owner' ? 'on' : ''}">${I(ic)}${esc(t(l))}</button>`).join('')}</div></label>
+      <div id="wbox"></div>
+      ${input('note', t('Note'), '')}
+      <div class="eff" id="ceff"></div>`,
       actions: [{ label: t('Cancel'), cls: 'ghost' }, { label: t('Save'), cls: 'gold', onClick: close => {
         const amt = num($('[name=amt]', sh.el).value); if (!(amt > 0)) throw new Error(t('Enter an amount'));
-        const name = who || $('#whoO', sh.el).value.trim(); if (!name) throw new Error(t('Who took the money?'));
-        enqueue('cash.out', { id: A.uid('CO'), business: S.biz, amount: amt, currency: cur, takenBy: name, reason, note: $('[name=note]', sh.el).value });
+        const d = { id: A.uid('CO'), business: S.biz, amount: amt, currency: cur, account, whoType, reason, note: $('[name=note]', sh.el).value.trim() };
+        if (whoType === 'customer' || whoType === 'supplier') {
+          if (!pick) throw new Error(whoType === 'customer' ? t('Choose a customer') : t('Choose a supplier'));
+          d.refId = pick.id; d.takenBy = pick.name; d.reason = whoType === 'customer' ? 'Customer took' : 'Paid supplier';
+        } else {
+          d.takenBy = whoType === 'owner' && who ? who : ($('#whoO', sh.el) || {}).value ? $('#whoO', sh.el).value.trim() : who;
+          if (!d.takenBy) throw new Error(t('Who took the money?'));
+        }
+        if (whoType === 'supplier') needOnline();   // supplier balances live on the server
+        enqueue('cash.out', d);
+        if (whoType === 'customer') { pick.balance = num(pick.balance) + shOf(d); A.saveData(); }
         close(); toast(t('Saved'), 'ok'); done && done();
       } }] });
-    seg($('#ccur', sh.el), v => { cur = v; });
-    $$('#who .chip', sh.el).forEach(c => c.onclick = () => { who = c.dataset.w; $$('#who .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); $('#whoO', sh.el).classList.toggle('hidden', !!who); if (!who) $('#whoO', sh.el).focus(); });
-    $$('#why .chip', sh.el).forEach(c => c.onclick = () => { reason = c.dataset.r; $$('#why .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); });
+    const el = sh.el;
+    const drawWho = () => {
+      const w = $('#wbox', el); pick = whoType === 'customer' || whoType === 'supplier' ? pick : null;
+      if (whoType === 'owner' || whoType === 'other') {
+        const reasons = whoType === 'owner' ? ['Owner took', 'Bank deposit', 'Other'] : ['Rent', 'Worker pay', 'Transport', 'Other'];
+        if (reasons.indexOf(reason) < 0) reason = reasons[0];
+        w.innerHTML = (whoType === 'owner' && owners.length ? `<div class="chips" id="who" style="margin-bottom:10px">${owners.map(n => `<button type="button" class="chip ${n === who ? 'on' : ''}" data-w="${esc(n)}">${esc(n)}</button>`).join('')}</div>`
+            : `<input class="in" id="whoO" placeholder="${esc(t('Name'))}" style="margin-bottom:10px">`) +
+          `<label class="f"><span>${esc(t('Why'))}</span><div class="chips" id="why">${reasons.map(r => `<button type="button" class="chip ${r === reason ? 'on' : ''}" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>`;
+        $$('#who .chip', el).forEach(c => c.onclick = () => { who = c.dataset.w; $$('#who .chip', el).forEach(x => x.classList.toggle('on', x === c)); });
+        $$('#why .chip', el).forEach(c => c.onclick = () => { reason = c.dataset.r; $$('#why .chip', el).forEach(x => x.classList.toggle('on', x === c)); });
+        if (whoType === 'other') who = '';
+      } else if (pick) {
+        const bal = num(pick.balance);
+        w.innerHTML = `<div class="pickc"><span class="av">${I(whoType === 'customer' ? 'user' : 'truck')}</span><div class="grow"><b>${esc(pick.name)}</b><span class="s">${esc(whoType === 'customer' ? t('Owes now: {x}', { x: money(bal) }) : t('We owe: {x}', { x: money(bal) }))}${pick.phone ? ' · ' + esc(pick.phone) : ''}</span></div><button type="button" class="btn sm text" id="chg">${esc(t('Change'))}</button></div><div id="bal"></div>`;
+        $('#chg', el).onclick = () => { pick = null; drawWho(); };
+      } else {
+        const list = whoType === 'customer' ? custs() : sups();
+        w.innerHTML = `<label class="search" style="margin-bottom:8px">${I('search')}<input id="ps" placeholder="${esc(whoType === 'customer' ? t('Search customer') : t('Search supplier'))}"></label><div class="list" id="pl" style="max-height:220px;overflow:auto"></div>`;
+        const drawL = () => {
+          const q = ($('#ps', el).value || '').toLowerCase();
+          const l = list.filter(c => !q || (c.name + ' ' + (c.phone || '')).toLowerCase().includes(q)).slice(0, 40);
+          $('#pl', el).innerHTML = l.map(c => `<div class="li tap" data-id="${esc(c.id)}"><div class="main"><div class="name">${esc(c.name)}</div><div class="sub">${esc(c.phone || '')}</div></div><span class="small ${num(c.balance) > 0 ? 'red' : 'muted'}">${fmt(c.balance)}</span></div>`).join('') || `<div class="empty small">${esc(t('Nothing found'))}</div>`;
+          $$('#pl .li', el).forEach(r => r.onclick = () => { pick = list.find(c => c.id === r.dataset.id); drawWho(); upd(); });
+        };
+        $('#ps', el).oninput = drawL; drawL();
+      }
+      upd();
+    };
+    const upd = () => {
+      const amt = num($('[name=amt]', el).value), sh2 = cur === 'USD' ? Math.round(amt * A.rate()) : amt, accN = A.methodName(account);
+      const a = amt ? `<div><small>${esc(account === 'cash' ? t('CASH DRAWER') : accN.toUpperCase())}${cur === 'USD' ? ' USD' : ''}</small><b class="dn">−${cur === 'USD' ? usdF(amt) : fmt(amt)}</b></div>` : '';
+      let b = '';
+      if (amt && pick && whoType === 'customer') b = `<div><small>${esc(t('{n} OWES', { n: pick.name.split(' ')[0].toUpperCase() }))}</small><b style="color:#8A4B00">+${fmt(sh2)}</b></div>`;
+      if (amt && pick && whoType === 'supplier') b = `<div><small>${esc(t('OWED TO {n}', { n: pick.name.split(' ')[0].toUpperCase() }))}</small><b class="up">−${fmt(sh2)}</b></div>`;
+      $('#ceff', el).innerHTML = a + b;
+      const bb = $('#bal', el);
+      if (bb) bb.innerHTML = amt && pick ? `<div class="bal ${whoType === 'supplier' ? 'sup' : ''}">${esc(whoType === 'customer' ? t('{n}’s balance: {a} → {b}', { n: pick.name.split(' ')[0], a: fmt(pick.balance), b: money(num(pick.balance) + sh2) })
+        : t('We owe {n}: {a} → {b}', { n: pick.name.split(' ')[0], a: fmt(pick.balance), b: money(num(pick.balance) - sh2) }))}${cur === 'USD' ? ` <span class="small">(${esc(usdF(amt))} = ${fmt(sh2)})</span>` : ''}</div>` : '';
+    };
+    seg($('#cacc', el), v => { account = v; upd(); });
+    seg($('#ccur', el), v => { cur = v; upd(); });
+    $$('#wt button', el).forEach(b => b.onclick = () => { whoType = b.dataset.w; pick = null; who = whoType === 'owner' ? owners[0] || '' : ''; $$('#wt button', el).forEach(x => x.classList.toggle('on', x === b)); drawWho(); });
+    $('[name=amt]', el).oninput = upd;
+    drawWho();
   }
   async function closeShift(sh) {
     needOnline();
@@ -671,8 +767,8 @@
     });
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(c.phone, t('Hello {n}, your balance at {b} is {x}. Thank you.', { n: c.name, b: biz, x: money(c.balance) }));
     A.cachedCall('cust.ledger', { customerId: c.id }, r => {
-      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t({ sale: 'Credit sale', payment: 'Payment', refund: 'Refund', void: 'Undone sale', reset: 'Balance reset', opening: 'Carried forward' }[l.type] || l.type))}</div>
-        <div class="sub">${A.when(l.ts)} · ${esc(l.userName)} ${l.method && l.type === 'payment' ? '· ' + esc(A.methodName(l.method)) : ''}</div></div>${(() => { const v = l.type === 'sale' ? num(l.amount) : (l.type === 'reset' || l.type === 'opening') ? num(l.amount) : -num(l.amount); return `<b class="${v > 0 ? 'red' : 'green'}">${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</b>`; })()}</div>`).join('') || `<div class="empty">—</div>`}</div>`;
+      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t({ sale: 'Credit sale', payment: 'Payment', refund: 'Refund', void: 'Undone sale', reset: 'Balance reset', opening: 'Carried forward', loan: 'Money taken', loanundo: 'Money taken — undone' }[l.type] || l.type))}${(l.type === 'loan' || l.type === 'loanundo') && l.method ? ' · ' + esc(A.methodName(l.method)) : ''}</div>
+        <div class="sub">${A.when(l.ts)} · ${esc(l.userName)} ${l.method && l.type === 'payment' ? '· ' + esc(A.methodName(l.method)) : ''}${l.note && (l.type === 'loan' || l.type === 'loanundo') ? ' · ' + esc(l.note) : ''}</div></div>${(() => { const v = l.type === 'sale' || l.type === 'loan' ? num(l.amount) : (l.type === 'reset' || l.type === 'opening') ? num(l.amount) : -num(l.amount); return `<b class="${v > 0 ? 'red' : 'green'}">${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</b>`; })()}</div>`).join('') || `<div class="empty">—</div>`}</div>`;
     }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }
   function paymentForm(c, done) {
@@ -826,7 +922,7 @@
         <div class="name">${esc(x.userName)} · ${esc(A.bizName(x.business))}</div><div class="sub">${esc(t('Started'))} <b>${String(x.openTs).slice(11, 16)}</b>${x.scheduled ? ' · ' + esc(t('scheduled {t}', { t: x.scheduled })) : ''}${x.closeTs ? ' · ' + esc(t('ended')) + ' ' + String(x.closeTs).slice(11, 16) + (x.worked !== '' ? ' · ' + Math.floor(x.worked / 60) + 'h ' + (x.worked % 60) + 'm' : '') : ''}</div>
         <div style="margin-top:4px">${x.lateBy ? `<span class="pill gold">${esc(t('{n} min late', { n: x.lateBy }))}</span>` : `<span class="pill green">${esc(t('On time'))}</span>`} ${x.status === 'open' ? `<span class="pill green">${esc(t('Open'))}</span>` : diffTxt(x.diffAll !== '' && x.diffAll !== undefined ? x.diffAll : x.diffCash)}</div></div></div>`).join('')}</div>` : ''}
       ${(r.exchanges || []).length ? `<h3>${esc(t('Exchanges'))}</h3><div class="list">${r.exchanges.map(e => `<div class="li lead"><span class="av ${e.dir === 'out' ? 'green' : 'gold'}">${I('swap')}</span><div class="main"><div class="name">${esc(exTitle(e))}</div><div class="sub">${A.when(e.ts)} · ${esc(e.userName)}${num(e.fee) > 0 ? ' · ' + esc(t('shop kept {x}', { x: fmt(e.fee) })) : ''}${e.customer ? ' · ' + esc(e.customer) : ''}</div></div></div>`).join('')}</div>` : ''}
-      ${(r.cashMoves || []).length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${r.cashMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div><div class="sub">${A.when(m.ts)} · ${esc(t(m.reason || ''))} · ${esc(t('recorded by {n}', { n: m.userName }))}</div></div></div>`).join('')}</div>` : ''}
+      ${(r.cashMoves || []).length ? `<h3>${esc(t('Money taken out'))}</h3><div class="list">${r.cashMoves.map(m => moveRow(m, false)).join('')}</div>` : ''}
       <h3>${esc(t('Money in shifts'))}</h3><div class="list">${r.balances.map(b => `
         ${b.open.map(o => `<div class="li lead"><span class="av green">${I('clock')}</span><div class="main"><div class="name">${esc(A.bizName(b.business))} · ${esc(o.userName)}</div>
           <div class="sub" style="white-space:normal">${esc(t('Expected now'))}: ${esc(t('Cash'))} ${fmt(o.expectedCash)} · Zaad ${fmt(o.expectedZaad)} · Edahab ${fmt(o.expectedEd)}</div></div><span class="pill green">${esc(t('Open'))}</span></div>`).join('')}
@@ -1261,7 +1357,7 @@
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(s.phone, t('Hello {n},', { n: s.name }));
     $$('.li[data-id]', el).forEach(r => r.onclick = () => { sh.close(); poSheet(orders.find(o => o.id === r.dataset.id), done); });
     A.cachedCall('sup.ledger', { supplierId: s.id }, r => {
-      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => { const isPay = l.type === 'payment' || ((l.type === 'opening' || l.type === 'adjust') && num(l.amount) < 0); return `<div class="li"><span class="av ${isPay ? 'green' : 'gold'}" style="width:34px;height:34px">${I(isPay ? 'cash' : 'inbox', 'sm')}</span><div class="main"><div class="name">${esc(l.type === 'opening' ? t('Carried forward') : l.type === 'adjust' ? t('Balance reset') : isPay ? t('Payment') : t('Goods received'))}${l.note ? ' · ' + esc(l.note) : ''}</div>
+      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => { const isPay = l.type === 'payment' || ((l.type === 'opening' || l.type === 'adjust') && num(l.amount) < 0); return `<div class="li"><span class="av ${isPay ? 'green' : 'gold'}" style="width:34px;height:34px">${I(isPay ? 'cash' : 'inbox', 'sm')}</span><div class="main"><div class="name">${esc(l.type === 'opening' ? t('Carried forward') : l.type === 'adjust' && /^Undo payment/.test(l.note || '') ? t('Payment undone') : l.type === 'adjust' ? t('Balance reset') : isPay ? t('Payment') : t('Goods received'))}${l.note ? ' · ' + esc(l.note) : ''}</div>
         <div class="sub">${A.when(l.ts)} · ${esc(l.userName)}${isPay ? ' · ' + esc(A.methodName(l.method)) : ''}</div></div><b class="${isPay ? 'green' : ''}">${isPay ? '−' : '+'}${fmt(Math.abs(l.type === 'purchase' ? num(l.amount) - num(l.paid) : num(l.amount)))}</b></div>`; }).join('') || '<div class="empty small">—</div>'}</div>`;
     }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }

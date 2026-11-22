@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -284,6 +284,7 @@
     plus: ['p:M12 5v14M5 12h14'], minus: ['p:M5 12h14'], x: ['p:M6 6l12 12M18 6 6 18'], check: ['p:M5 12.5l4.5 4.5L19 7'],
     down: ['p:M6 9l6 6 6-6'], right: ['p:M9 6l6 6-6 6'], left: ['p:M15 6l-6 6 6 6'],
     user: ['c:12,8,4', 'p:M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'],
+    dots: ['c:5,12,1.6', 'c:12,12,1.6', 'c:19,12,1.6'],
     backspace: ['p:M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z', 'p:M12.5 9.5l5 5M17.5 9.5l-5 5'],
     download: ['p:M12 3v12', 'p:M7 10l5 5 5-5', 'p:M5 21h14'],
     chat: ['p:M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 21l2.1-5.4A8.5 8.5 0 1 1 21 11.5z'],

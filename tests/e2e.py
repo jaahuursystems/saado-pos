@@ -214,9 +214,19 @@ with sync_playwright() as p:
     page.click('#mysales [data-undo] >> nth=0'); page.click('#rs .chip[data-r="Wrong item"]'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.toast.ok')
     rows = sheet('Sales'); assert any('undone' in [str(c) for c in r] for r in rows), rows; step('staff undoes a sale in her own shift (kept as "undone")')
     # ---------- cash out ----------
-    page.click('#co'); page.fill('.sheet [name=amt]', '10000'); page.click('#why .chip[data-r="Bank / Zaad deposit"]'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.click('#co'); page.fill('.sheet [name=amt]', '10000'); page.click('#why .chip[data-r="Bank deposit"]'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
     page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
-    assert len(sheet('CashMoves')) == 1; step('cash taken out of the drawer (10,000 SH)')
+    assert len(sheet('CashMoves')) == 1; step('cash taken out of the drawer (10,000 SH, owner)')
+    # a customer takes 5,000 from Zaad → added to what she owes; then undone → back to 32,000
+    page.goto(BASE + '/#sell'); page.goto(BASE + '/#shift'); page.wait_for_selector('#co'); page.click('#co'); page.click('#cacc button[data-v="zaad"]'); page.fill('.sheet [name=amt]', '5000')
+    page.click('#wt button[data-w="customer"]'); page.wait_for_selector('#pl .li'); page.click('#pl .li >> nth=0'); page.wait_for_selector('.pickc')
+    assert '37,000' in page.inner_text('#bal'), page.inner_text('#bal'); page.screenshot(path=SHOTS + '09d-money-out-customer.png')
+    page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    assert str(sheet('Customers')[0][4]) == '37000', sheet('Customers'); step('customer takes 5,000 from Zaad: added to her balance (32,000 → 37,000)')
+    page.goto(BASE + '/#sell'); page.goto(BASE + '/#shift'); page.wait_for_selector('#moves [data-mvu]'); page.screenshot(path=SHOTS + '09e-money-out-list.png', full_page=True)
+    page.click('#moves .li:has-text("Zaad") [data-mvu]'); page.click('#rs .chip[data-r="Wrong person"]'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.toast.ok')
+    assert str(sheet('Customers')[0][4]) == '32000'; page.wait_for_selector('#moves .li.gone'); step('undo: Zaad and her balance go back (32,000), record kept as undone')
     # ---------- exchange: customer sends 10,000 Zaad, takes 10,000 cash ----------
     page.goto(BASE + '/#shift'); page.wait_for_selector('#exb'); page.click('#exb'); page.wait_for_selector('#xr')
     page.fill('#xr', '10000'); assert page.input_value('#xg') == '10000'; assert 'Khidmad ma jirto' in page.inner_text('#xfee'), page.inner_text('#xfee')

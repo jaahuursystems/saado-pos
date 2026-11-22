@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.5.0';
+var VERSION = '1.6.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -42,7 +42,8 @@ var SCHEMA = {
   IngLog:     ['id', 'ts', 'date', 'ingredientId', 'name', 'type', 'qty', 'userName', 'note'],
   StockLog:   ['id', 'ts', 'date', 'business', 'productId', 'name', 'type', 'before', 'after', 'diff', 'userName', 'note'],
   Audit:      ['ts', 'userName', 'action', 'details'],
-  CashMoves:  ['id', 'ts', 'date', 'business', 'shiftId', 'amount', 'currency', 'takenBy', 'reason', 'note', 'userName'],
+  // account = cash / zaad / edahab; whoType = owner / customer / supplier / other (refId = the customer or supplier); shAmount = amount in SH
+  CashMoves:  ['id', 'ts', 'date', 'business', 'shiftId', 'amount', 'currency', 'takenBy', 'reason', 'note', 'userName', 'account', 'whoType', 'refId', 'shAmount', 'status', 'undoneBy', 'undoneTs', 'undoReason'],
   // dir 'in' = customer sends Zaad/Edahab and takes cash; 'out' = customer gives cash and gets Zaad/Edahab
   Exchanges:  ['id', 'ts', 'date', 'business', 'shiftId', 'dir', 'account', 'recvAmount', 'recvCur', 'giveAmount', 'giveCur', 'fee', 'customer', 'userName', 'status', 'undoneBy', 'undoneTs'],
   Recipients: ['id', 'name', 'email', 'userId', 'daily', 'weekly', 'monthly', 'lowStock', 'active', 'createdAt'],
@@ -880,17 +881,67 @@ var ACTIONS = {
   },
 
   /* ---------- cash taken out of the drawer ---------- */
+  // Take money out: from cash, Zaad or Edahab (SH or USD), to an owner, a customer (added to what they owe),
+  // a supplier (paid: what we owe goes down) or anyone else.
   'cash.out': function (u, d) {
     need_(u, 'cashOut');
     if (exists_('CashMoves', d.id)) return { ok: true, dup: true };
     var biz = d.business; needBiz_(u, biz);
-    var amt = num_(d.amount); if (!(amt > 0)) throw new Error('Enter an amount');
-    var who = str_(d.takenBy, 40); if (!who) throw new Error('Who took the money?');
+    var cur = d.currency === 'USD' ? 'USD' : 'SH';
+    var amt = cur === 'USD' ? Math.round(num_(d.amount) * 100) / 100 : Math.round(num_(d.amount)); if (!(amt > 0)) throw new Error('Enter an amount');
+    var account = d.account === 'zaad' || d.account === 'edahab' ? d.account : 'cash';
+    var whoType = ['owner', 'customer', 'supplier', 'other'].indexOf(d.whoType) >= 0 ? d.whoType : 'other';
+    var shAmt = cur === 'USD' ? Math.round(amt * rate_()) : amt;
     var shift = openShift_(u, biz) || anyOpenShift_(biz);
-    var m = { id: d.id || uid_('CO'), ts: nowIso_(), date: today_(), business: biz, shiftId: shift ? shift.id : '', amount: amt, currency: d.currency === 'USD' ? 'USD' : 'SH',
-              takenBy: who, reason: str_(d.reason, 60), note: str_(d.note, 200), userName: u.name };
-    insert_('CashMoves', m); audit_(u, 'cash.out', { amount: amt, currency: m.currency, takenBy: who, reason: m.reason });
-    return { ok: true, move: clean_(m) };
+    var id = d.id || uid_('CO'), now = nowIso_(), who = str_(d.takenBy, 60), refId = '';
+    if (whoType === 'customer') {
+      var c = find_('Customers', d.refId); if (!c || !isOn_(c.active)) throw new Error('Customer not found');
+      c.balance = num_(c.balance) + shAmt; update_('Customers', c); who = c.name; refId = c.id;
+      insert_('CustLedger', { id: uid_('CL'), ts: now, date: today_(), business: c.business, customerId: c.id, type: 'loan', amount: shAmt, method: account,
+                              ref: id, shiftId: shift ? shift.id : '', userName: u.name, note: (cur === 'USD' ? '$' + amt + ' · ' : '') + str_(d.note, 200) });
+    } else if (whoType === 'supplier') {
+      var sp = find_('Suppliers', d.refId); if (!sp || !isOn_(sp.active)) throw new Error('Supplier not found');
+      who = sp.name; refId = sp.id;
+      insert_('SupLedger', { id: uid_('SPY'), ts: now, date: today_(), business: sp.business, supplierId: sp.id, type: 'payment', amount: shAmt, paid: shAmt,
+                             method: account, items: '', userName: u.name, note: (cur === 'USD' ? '$' + amt + ' · ' : '') + str_(d.note, 200), ref: id });
+      supBalance_(sp);
+    }
+    if (!who) throw new Error('Who took the money?');
+    var m = { id: id, ts: now, date: today_(), business: biz, shiftId: shift ? shift.id : '', amount: amt, currency: cur,
+              takenBy: who, reason: str_(d.reason, 60), note: str_(d.note, 200), userName: u.name,
+              account: account, whoType: whoType, refId: refId, shAmount: shAmt, status: 'done' };
+    insert_('CashMoves', m); audit_(u, 'cash.out', { amount: amt, currency: cur, account: account, to: whoType + ': ' + who, reason: m.reason });
+    var out = { ok: true, move: clean_(m) };
+    if (c) out.customer = clean_(c); if (sp) out.supplier = clean_(sp);
+    return out;
+  },
+
+  // Undo money taken out (like a sale): the person who wrote it while their shift is open, or an owner. Everything goes back:
+  // the account's expected money, the customer's balance, or what we owe the supplier. The row stays, marked "undone".
+  'cash.undo': function (u, d) {
+    var m = find_('CashMoves', d.id); if (!m) throw new Error('Not found (it may still be syncing)');
+    if (m.status === 'undone') return { ok: true, dup: true };
+    var reason = str_(d.reason, 120); if (!reason) throw new Error('Choose a reason');
+    var s = m.shiftId ? find_('Shifts', m.shiftId) : null, open = s && s.status === 'open';
+    if (!isOwner_(u)) {
+      need_(u, 'cashOut');
+      if (m.userName !== u.name) throw new Error('NOPERM: only the person who wrote it or the owner can undo it');
+      if (!open) throw new Error('This shift is closed. It can no longer be undone.');
+    }
+    var now = nowIso_(), shAmt = num_(m.shAmount) || num_(m.amount), out = { ok: true };
+    if (m.whoType === 'customer') {
+      var c = find_('Customers', m.refId);
+      if (c) { c.balance = num_(c.balance) - shAmt; update_('Customers', c); out.customer = clean_(c);
+        insert_('CustLedger', { id: uid_('CL'), ts: now, date: today_(), business: c.business, customerId: c.id, type: 'loanundo', amount: shAmt, method: m.account, ref: m.id, shiftId: m.shiftId, userName: u.name, note: reason }); }
+    } else if (m.whoType === 'supplier') {
+      var sp = find_('Suppliers', m.refId);
+      if (sp) { insert_('SupLedger', { id: uid_('SPY'), ts: now, date: today_(), business: sp.business, supplierId: sp.id, type: 'adjust', amount: shAmt, paid: '', method: m.account, items: '', userName: u.name, note: 'Undo payment · ' + reason, ref: m.id });
+        supBalance_(sp); out.supplier = clean_(sp); }
+    }
+    m.status = 'undone'; m.undoneBy = u.name; m.undoneTs = now; m.undoReason = reason; update_('CashMoves', m);
+    audit_(u, 'cash.undo', { amount: m.amount, currency: m.currency, account: m.account, to: m.takenBy, reason: reason });
+    out.move = clean_(m);
+    return out;
   },
 
   /* ---------- exchange Zaad/Edahab <-> cash (no sale) ---------- */
@@ -1502,7 +1553,7 @@ function saleMoney_(x) {
 }
 function shiftTotals_(s) {
   var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, expCashUSD: 0, expZaadUSD: 0, expEdUSD: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0,
-            cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, undoneCount: 0,
+            cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, zaadOutSH: 0, zaadOutUSD: 0, edOutSH: 0, edOutUSD: 0, undoneCount: 0,
             changeFromAcct: 0, excashSH: 0, excashUSD: 0, exzaadSH: 0, exzaadUSD: 0, exedSH: 0, exedUSD: 0, exCount: 0, exFees: 0 };
   var key = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }, inKey = { cash: 'cash', zaad: 'zaad', edahab: 'ed' };
   var since = String(s.date || dateOf_(s.openTs)).slice(0, 10);
@@ -1530,14 +1581,18 @@ function shiftTotals_(s) {
     if (x.currency === 'USD') t['exp' + key[x.method] + 'USD'] += num_(x.usdAmount); else t['exp' + key[x.method]] += num_(x.amount);
   });
   recent_('Refunds', since).forEach(function (x) { if (x.shiftId === s.id && x.status === 'approved' && key[x.method]) t['ref' + key[x.method]] += num_(x.amount); });
-  recent_('CashMoves', since).forEach(function (x) { if (x.shiftId === s.id) t[x.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num_(x.amount); });
+  recent_('CashMoves', since).forEach(function (x) {
+    if (x.shiftId !== s.id || x.status === 'undone') return;
+    var k = x.account === 'zaad' ? 'zaadOut' : x.account === 'edahab' ? 'edOut' : 'cashOut';
+    t[k + (x.currency === 'USD' ? 'USD' : 'SH')] += num_(x.amount);
+  });
   var rate = num_(s.rate) || rate_(), r2 = function (v) { return Math.round(v * 100) / 100; };
   t.eCashSH = num_(s.openCash) + t.cashInSH + t.custPayCash - t.expCash - t.refCash - t.cashOutSH + t.excashSH;
   t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD - t.expCashUSD + t.excashUSD);
-  t.eZaadSH = num_(s.openZaadSH) + t.zaadInSH + t.custPayZaad - t.expZaad - t.refZaad + t.exzaadSH;
-  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD - t.expZaadUSD + t.exzaadUSD);
-  t.eEdSH = num_(s.openEdSH) + t.edInSH + t.custPayEd - t.expEd - t.refEd + t.exedSH;
-  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD - t.expEdUSD + t.exedUSD);
+  t.eZaadSH = num_(s.openZaadSH) + t.zaadInSH + t.custPayZaad - t.expZaad - t.refZaad + t.exzaadSH - t.zaadOutSH;
+  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD - t.expZaadUSD + t.exzaadUSD - t.zaadOutUSD);
+  t.eEdSH = num_(s.openEdSH) + t.edInSH + t.custPayEd - t.expEd - t.refEd + t.exedSH - t.edOutSH;
+  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD - t.expEdUSD + t.exedUSD - t.edOutUSD);
   t.totalExpSH = t.eCashSH + t.eZaadSH + t.eEdSH;
   t.totalExpUSD = r2(t.eCashUSD + t.eZaadUSD + t.eEdUSD);
   // same money counted in SH (older screens and reports use these)
@@ -1612,7 +1667,7 @@ function report_(u, d) {
              edahab: num_(closed.closeEdSH) + num_(closed.closeEdUSD) * rate, diffCash: num_(closed.diffCash), diffZaad: num_(closed.diffZaad), diffEd: num_(closed.diffEd) } : null, open: open };
   });
   var shifts = table_('Shifts').rows.filter(inR).map(function (x) { return Object.assign(clean_(x), lateInfo_(x)); });
-  var cashMoves = table_('CashMoves').rows.filter(inR).map(clean_);
+  var cashMoves = table_('CashMoves').rows.filter(inR).map(clean_);   // undone ones are shown crossed out
   var exchanges = table_('Exchanges').rows.filter(function (x) { return inR(x) && x.status !== 'undone'; }).map(clean_);
   var undone = table_('Sales').rows.filter(function (x) { return inR(x) && GONE[x.status]; })
     .map(function (x) { return { id: x.id, ts: x.ts, userName: x.userName, total: num_(x.total), method: x.method, status: x.status, undoneBy: x.undoneBy, reason: x.undoReason }; });
