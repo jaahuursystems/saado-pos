@@ -74,6 +74,14 @@ with sync_playwright() as p:
     page.click('.ft .btn.gold'); page.wait_for_selector('#pl .name:has-text("Beensal")'); page.wait_for_selector('.ov', state='detached')
     row = [r for r in sheet('Products') if 'Beensal' in r][0]; hdr = sheet('Products', header=True)[0]
     P = dict(zip(hdr, row)); assert P['loose'] in ('1', 1) and str(P['perPack']) == '20' and str(P['stock']) == '87' and json.loads(P['looseTable']) == [[1, 1000], [2, 2000], [3, 2500]], P
+    # item priced in dollars
+    page.click('.fab'); page.fill('[name=name]', 'Shampoo'); page.click('#pcurP button[data-v="USD"]'); page.fill('[name=priceUSD]', '2.50'); page.fill('[name=costUSD]', '1.80'); page.fill('[name=stock]', '18')
+    assert '29,625' in page.inner_text('#usdEq'), page.inner_text('#usdEq'); page.screenshot(path=SHOTS + '03c-usd-price.png', full_page=True)
+    page.click('.ft .btn.gold'); page.wait_for_selector('#pl .name:has-text("Shampoo") .usd'); page.wait_for_selector('.ov', state='detached')
+    P2 = dict(zip(sheet('Products', header=True)[0], [r for r in sheet('Products') if 'Shampoo' in r][0])); assert P2['priceCur'] == 'USD' and str(P2['price']) == '29625' and str(P2['cost']) == '21330', P2
+    step('owner adds an item priced in dollars ($2.50 → 29,625 SH at 11,850)')
+    r = page.evaluate("""async () => { const u = (await App.api('users.list', {})).users.find(x => x.name === 'Raxma'); return (await App.api('users.save', Object.assign({}, u, { perms: u.perms.concat(['exchange']) }))).ok }""")
+    assert r; step('owner ticks "Exchange" for Raxma')
     assert '4 baakad + 7 xabbo' in page.inner_text('#pl'), page.inner_text('#pl'); step('owner switches on "sell loose" for Beensal (20 pcs, price list, stock 4 pk + 7 pcs)')
     page.click('.bizswitch button[data-b="food"]'); page.wait_for_timeout(300)
     page.goto(BASE + '/#products'); page.wait_for_selector('.fab')
@@ -190,8 +198,12 @@ with sync_playwright() as p:
     page.click('.tile:has-text("Beensal")'); page.click('#pkBtn'); page.wait_for_selector('.ov', state='detached')
     assert '18,500' in page.inner_text('.cartbar'), page.inner_text('.cartbar')
     page.click('#openCart'); page.wait_for_selector('#cl .lz'); page.screenshot(path=SHOTS + '05d-loose-cart.png'); page.click('.ov .ft .btn.gold')
-    page.wait_for_selector('#tend'); page.click('[data-name=method] button[data-v="zaad"]'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_selector('#tend'); page.click('[data-name=method] button[data-v="zaad"]')
+    page.fill('#sent', '20000'); page.wait_for_selector('#sentInfo .changebox'); assert '1,500' in page.inner_text('#sentInfo'), page.inner_text('#sentInfo')
+    page.screenshot(path=SHOTS + '05e-zaad-change.png'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
     page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    S = dict(zip(sheet('Sales', header=True)[0], sheet('Sales')[-1])); assert S['method'] == 'zaad' and str(S['tendered']) == '20000' and str(S['change']) == '1500', S
+    step('customer sent 20,000 Zaad for 18,500: app says give 1,500 change in cash')
     items = sheet('SaleItems')[-2:]; assert items[0][-1] == 'pc' and str(items[0][5]) == '3' and str(items[0][8]) == '2500' and items[1][-1] == '', items
     P = dict(zip(sheet('Products', header=True)[0], [r for r in sheet('Products') if 'Beensal' in r][0])); assert str(P['stock']) == '64', P['stock']
     step('sold 3 loose pieces (2,500) + 1 packet (16,000); stock 87 → 64 pieces')
@@ -205,6 +217,13 @@ with sync_playwright() as p:
     page.click('#co'); page.fill('.sheet [name=amt]', '10000'); page.click('#why .chip[data-r="Bank / Zaad deposit"]'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
     page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
     assert len(sheet('CashMoves')) == 1; step('cash taken out of the drawer (10,000 SH)')
+    # ---------- exchange: customer sends 10,000 Zaad, takes 10,000 cash ----------
+    page.goto(BASE + '/#shift'); page.wait_for_selector('#exb'); page.click('#exb'); page.wait_for_selector('#xr')
+    page.fill('#xr', '10000'); assert page.input_value('#xg') == '10000'; assert 'Khidmad ma jirto' in page.inner_text('#xfee'), page.inner_text('#xfee')
+    page.fill('[name=customer]', 'Axmed'); page.screenshot(path=SHOTS + '09c-exchange.png'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    X = sheet('Exchanges'); assert len(X) == 1 and 'Axmed' in X[0], X
+    page.goto(BASE + '/#sell'); page.goto(BASE + '/#shift'); page.wait_for_selector('#exch .li'); step('exchange saved: Zaad +10,000, cash −10,000')
     # ---------- end shift ----------
     page.goto(BASE + '/#sell'); page.wait_for_timeout(2500)
     reqs = []
@@ -216,8 +235,8 @@ with sync_playwright() as p:
     page.evaluate("App.syncNow && window.Screens.onSync()"); page.wait_for_timeout(800)
     assert page.evaluate("document.activeElement && document.activeElement.name") == 'closeCash' and page.input_value('#cmp [name=closeCash]') == '1'; step('fresh numbers arrive without interrupting typing')
     page.fill('#cmp [name=closeCash]', '')
-    # expected cash SH = 100000 - 750 change + 20000 debt paid - 5000 expense - 10000 cash out = 104,250 ; USD = $5
-    exp = page.inner_text('#expNow'); assert '104,250' in exp and '$5' in exp, exp
+    # expected cash SH = 100000 - 750 change + 20000 debt paid - 5000 expense - 10000 cash out - 1500 Zaad change - 10000 exchange = 92,750 ; USD = $5
+    exp = page.inner_text('#expNow'); assert '92,750' in exp and '$5' in exp, exp
     page.screenshot(path=SHOTS + '10-shift.png', full_page=True)
     for n in ['closeCash', 'closeZaadSH', 'closeEdSH', 'closeCashUSD', 'closeZaadUSD', 'closeEdUSD']:
         e = page.get_attribute(f'#cmp [name={n}]', 'data-exp'); v = float(e) - (500 if n == 'closeCash' else 0)

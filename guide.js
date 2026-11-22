@@ -10,11 +10,12 @@ window.GUIDE = {
 <li>Taabo <b>Bixi</b>. Dooro <b>Caddaan / Zaad / Edahab / Deyn</b>.</li>
 <li>Caddaan: geli lacagta uu bixiyey (SH ama USD) — baaqiga waxaa lagu tusayaa SH.</li>
 <li>Zaad / Edahab: macmiilka tus lambarka akoonka. Hubi in lacagtu timid.</li>
-<li>Zaad / Edahab: dooro <b>SH</b> ama <b>USD</b> — sida macmiilku u bixiyey.</li>
+<li>Zaad / Edahab: dooro <b>SH</b> ama <b>USD</b> — sida macmiilku u bixiyey. Macmiilku ma soo diray wax ka badan (tusaale 4,000 iib 2,000 ah)? Qor <b>inta timid</b>; app-ku wuxuu kuu sheegayaa baaqiga aad caddaan ahaan u celinayso.</li>
 <li>Taabo <b>Dhammee iibka</b>.</li>
 <li>Macmiil kale ayaa yimid? Taabo <b>Dhig</b> (dambiisha hoose). Dabadeed ka soo celi badhanka sare.</li>
 <li>Dambiisha oo dhan ka saar: taabo <b>✕</b>. Khalad? Taabo <b>Celi</b> 5 ilbiriqsi gudahood.</li></ol>
 <h4>Iib khaldan ma dhacay?</h4><p><b>Wareeg → Iibka wareeggayga</b> → taabo iibka → <b>Celi iibka</b>, dooro sababta. Kaydka, lacagta la filayo iyo deynta macmiilka si toos ah ayaa loo saxayaa. Wareeggaaga furan oo keliya; milkiiluhu wuu arkaa.</p>
+<h4>Sarrif (Zaad / Edahab ↔ caddaan)</h4><p><b>Wareeg → Sarrif</b>: macmiil soo diray Zaad oo caddaan qaatay (ama caddaan bixiyey oo Zaad helay). Qor inta la helay iyo inta la bixiyey; haddii aad wax yar reebto waa khidmad. Wareeggu si sax ah ayuu u xisaabiyaa. Milkiilaha ayaa go'aamiya cidda samayn karta.</p>
 <h4>Lacag ka qaad khasnadda</h4><p><b>Wareeg → Lacag ka qaad khasnadda</b>: lacagta, SH ama USD, yaa qaatay, sababta. Caddaanka la filayo wuu yaraanayaa.</p>
 <h4>4. Internet la'aan</h4><p>Iibku wuu shaqaynayaa xitaa internet la'aan. Calaamadda sare waxay muujinaysaa inta sugaysa. Marka internet-ku yimaado si toos ah ayaa loo dirayaa. <b>Ha ka bixin</b> ka hor inta aan la dirin.</p>
 <h4>5. Deyn iyo lacag-bixin</h4><ul><li>Iib deyn ah: dooro <b>Deyn</b>, dooro macmiilka (ama + macmiil cusub).</li><li>Macmiil deyn bixinaya: <b>Macaamiil</b> → magaca → <b>Qaado lacag</b>.</li></ul>
@@ -29,6 +30,7 @@ window.GUIDE = {
 <li>Soo koobidda maalinta waxay kuu imaanaysaa <b>iimayl</b> (eeg "Warbixinnada iimaylka").</li></ul>
 <h4>Alaabta</h4><ul>
 <li><b>Wax kale → Alaabta → + Alaab cusub</b>. Baarkoodka ku sawir kamaradda. Calaamadda xiddigta = had iyo jeer ka muuji shaashadda iibka.</li>
+<li><b>Qiimaha doollarka</b>: alaabta qiimaheeda doollar lagu sheego, dooro <b>Qiimaha waxaa lagu qoraa → Doollar</b> oo qor $2.50. Shilinka waxaa lagu xisaabiyaa sarrifka Dejinta; marka sarrifka la beddelo, qiimayaashu iyagaa isbeddela.</li>
 <li><b>Iibi xabbo xabbo</b> (sigaar iwm.): fur alaabta → daar <b>Iibi xabbo xabbo</b> → qor tirada xabbada hal baakad (20) iyo liiska qiimaha (1 = 1,000, 2 = 2,000, 3 = 2,500 …). Qiimaha baakaddu waa "Qiimaha iibka", qiimaha iibsiguna waa hal baakad. Kaydka waxaa lagu tiriyaa xabbo oo waxaa loo muujiyaa "4 baakad + 7 xabbo". Iibsiga alaab-keenaha waa baakado. Alaabta kale ha daarin.</li>
 <li>Alaab badan: <b>Soo geli CSV / Excel</b>. Marka hore <b>Soo deji tusaalaha</b>, ku buuxi Excel, kadib soo geli. Baarkood isku mid ah = waa la cusboonaysiinayaa.</li>
 <li><b>Tirinta kaydka</b>: sawir shay kasta, qor tirada dhabta ah, kaydi.</li></ul>
@@ -63,11 +65,12 @@ window.GUIDE = {
 <li>Tap <b>Pay</b>. Choose <b>Cash / Zaad / Edahab / Credit</b>.</li>
 <li>Cash: type what the customer gave (SH or USD) — change is shown in SH.</li>
 <li>Zaad / Edahab: show the customer the account number. Check the money arrived.</li>
-<li>Zaad / Edahab: choose <b>SH</b> or <b>USD</b> — how the customer paid.</li>
+<li>Zaad / Edahab: choose <b>SH</b> or <b>USD</b> — how the customer paid. Customer sent more (e.g. 4,000 for a 2,000 sale)? Type <b>what arrived</b>; the app tells you the change to give in cash.</li>
 <li>Tap <b>Complete sale</b>.</li>
 <li>Another customer is waiting? Tap <b>Park</b> (on the cart bar). Bring it back later from the button at the top.</li>
 <li>Empty the cart: tap <b>✕</b>. Mistake? Tap <b>Undo</b> within 5 seconds.</li></ol>
 <h4>Made a wrong sale?</h4><p><b>Shift → Sales in my shift</b> → tap the sale → <b>Undo sale</b>, pick a reason. Stock, expected money and the customer's debt are fixed automatically. Only in your own open shift; the owner sees every undo.</p>
+<h4>Exchange (Zaad / Edahab ↔ cash)</h4><p><b>Shift → Exchange</b>: a customer sends Zaad and takes cash (or gives cash and gets Zaad). Type what you received and what you gave; anything you keep is a fee. The shift totals stay right. The owner decides who can do this.</p>
 <h4>Take cash out</h4><p><b>Shift → Take cash out</b>: amount, SH or USD, who took it, why. Expected cash goes down.</p>
 <h4>4. No internet</h4><p>Selling still works. The icon at the top shows how many are waiting. They are sent automatically when the internet returns. <b>Do not log out</b> before they are sent.</p>
 <h4>5. Credit and payments</h4><ul><li>Credit sale: choose <b>Credit</b>, pick the customer (or + new customer).</li><li>Customer pays debt: <b>Customers</b> → name → <b>Receive payment</b>.</li></ul>
@@ -82,6 +85,7 @@ window.GUIDE = {
 <li>The daily summary comes by <b>email</b> (see "Email reports").</li></ul>
 <h4>Products</h4><ul>
 <li><b>More → Products → + New product</b>. Scan the barcode with the camera. The star = always show on the sell screen.</li>
+<li><b>Dollar prices</b>: for items priced in dollars, choose <b>Price in → Dollars</b> and type e.g. $2.50. The shilling price uses the rate in Settings; when you change the rate, these prices change by themselves.</li>
 <li><b>Sell loose (pieces)</b> (cigarettes etc.): open the product → switch on <b>Sell loose</b> → type the pieces in one packet (20) and the price list (1 = 1,000, 2 = 2,000, 3 = 2,500 …). The selling price is the packet price, and the cost is for one packet. Stock is counted in pieces and shown as "4 pk + 7 pcs". Supplier purchases stay in packets. Leave it off for everything else.</li>
 <li>Many products: <b>Import CSV / Excel</b>. First <b>Download template</b>, fill it in Excel, then import. Same barcode = updated, not duplicated.</li>
 <li><b>Stock count</b>: scan each item, type the real count, save.</li></ul>

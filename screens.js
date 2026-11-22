@@ -63,7 +63,8 @@
   const piecesInCart = id => { const p = findProd(id); return S.cart.filter(x => x.productId === id).reduce((a, l) => a + A.piecesOf(p, l.qty, l.unit), 0); };
   function stockTxt(p) { return S.biz === 'shop' && can('viewStock') ? ` · ${t('Stock')}: ${A.stockTxt(p)}` : ''; }
   const soldTxt = i => (num(i.qty) ? '×' + fmt(i.qty) : '') + (num(i.pcs) ? (num(i.qty) ? ' + ' : '') + fmt(i.pcs) + ' ' + t('pcs') : '');
-  const looseTag = p => A.isLoose(p) ? ` <span class="lz">${esc(t('LOOSE'))}</span>` : '';
+  const usdTag = p => p && p.priceCur === 'USD' && num(p.priceUSD) > 0 ? ` <span class="usd">${esc(usdF(p.priceUSD))}</span>` : '';
+  const looseTag = p => (A.isLoose(p) ? ` <span class="lz">${esc(t('LOOSE'))}</span>` : '') + usdTag(p);
   function drawResults() {
     const box = $('#results'); if (!box) return;
     const v = ($('#q') || {}).value ? $('#q').value.trim() : '';
@@ -138,7 +139,7 @@
     const d = Math.min(num(discount), sub);
     return { sub, discount: d, total: A.roundStep(sub - d), count: S.cart.reduce((a, l) => a + (l.unit === 'pc' ? 1 : l.qty), 0) };
   }
-  const lineName = l => esc(l.name) + (l.unit === 'pc' ? ` <span class="lz">${esc(t('{n} PCS', { n: l.qty }))}</span>` : A.isLoose(findProd(l.productId)) ? ` <span class="lz pkt">${esc(t('PACKET'))}</span>` : '');
+  const lineName = l => esc(l.name) + (l.unit === 'pc' ? '' : usdTag(findProd(l.productId))) + (l.unit === 'pc' ? ` <span class="lz">${esc(t('{n} PCS', { n: l.qty }))}</span>` : A.isLoose(findProd(l.productId)) ? ` <span class="lz pkt">${esc(t('PACKET'))}</span>` : '');
   function drawCartBar() {
     document.querySelectorAll('.cartbar').forEach(x => x.remove());
     if (S.route !== 'sell' || !S.cart.length) return;
@@ -251,8 +252,18 @@
         const acct = setting(biz + '_' + st.method), usdAmt = (Math.ceil(tt.total / A.rate() * 100) / 100).toFixed(2);
         box.innerHTML = `<label class="f"><span>${esc(t('Paid in'))}</span><div class="seg" id="pcur"><button data-v="SH" class="${st.payCur === 'SH' ? 'on' : ''}">${esc(t('Shillings (SH)'))}</button><button data-v="USD" class="${st.payCur === 'USD' ? 'on' : ''}">${esc(t('Dollars (USD)'))}</button></div></label>
           <div class="acct"><div class="muted">${esc(t('Customer sends to {m} account', { m: A.methodName(st.method) }))}</div><b>${esc(acct || '—')}</b>
-          <div class="bold" style="font-size:20px">${st.payCur === 'USD' ? '$' + usdAmt : money(tt.total)}</div></div><p class="small muted">${esc(t('Check the money arrived before completing.'))}</p>`;
-        seg($('#pcur', el), v => { st.payCur = v; drawMethod(); });
+          <div class="bold" style="font-size:20px">${st.payCur === 'USD' ? '$' + usdAmt : money(tt.total)}</div></div>
+          <label class="f"><span>${esc(t('Customer sent more? Type what arrived'))}</span><div class="row"><input class="in big grow" id="sent" inputmode="decimal" value="${esc(st.sent || '')}" placeholder="${esc(t('Exact amount'))}"></div></label>
+          <div id="sentInfo"></div><p class="small muted">${esc(t('Check the money arrived before completing.'))}</p>`;
+        const drawSent = () => {
+          const v = num(st.sent), usd = st.payCur === 'USD', given = usd ? v * A.rate() : v, ch = Math.round(given - tt.total), acc = A.methodName(st.method);
+          $('#sentInfo', el).innerHTML = !v ? '' : ch < 0 ? `<div class="changebox neg">${esc(t('Less than the total'))}</div>`
+            : `<div class="changebox">${esc(t('Give {x} change in CASH', { x: money(ch) }))}</div>
+               <div class="eff"><div><small>${esc(acc.toUpperCase())}</small><b class="up">+${usd ? usdF(v) : fmt(v)}</b></div><div><small>${esc(t('CASH DRAWER'))}</small><b class="dn">−${fmt(ch)}</b></div><div><small>${esc(t('SALE'))}</small><b>${fmt(tt.total)}</b></div></div>`;
+        };
+        $('#sent', el).oninput = e => { st.sent = e.target.value; drawSent(); };
+        drawSent();
+        seg($('#pcur', el), v => { st.payCur = v; st.sent = ''; drawMethod(); });
       } else {
         const list = (S.data.customers || []).filter(c => c.business === biz);
         box.innerHTML = `<label class="f"><span>${esc(t('Credit customer'))}</span><div class="row"><input class="in grow" id="cq" placeholder="${esc(t('Search customer'))}">
@@ -267,7 +278,7 @@
         const nb = $('#newc', el); if (nb) nb.onclick = () => customerForm(null, c => { list.push(c); st.customerId = c.id; draw(); });
       }
     };
-    seg($('[data-name=method]', el), v => { st.method = v; drawMethod(); });
+    seg($('[data-name=method]', el), v => { st.method = v; st.sent = ''; drawMethod(); });
     if ($('#otype', el)) seg($('#otype', el), v => { st.orderType = v; });
     const di = $('[name=discount]', el); if (di) di.oninput = () => { st.discount = num(di.value); drawTotal(); drawMethod(); };
     drawTotal(); drawMethod();
@@ -280,7 +291,13 @@
         change = num(st.tendered) * (st.cur === 'USD' ? A.rate() : 1) - tt.total;
         if (change < 0) throw new Error(t('Cash given is less than the total'));
       }
-      const data = { id: A.uid('S'), business: biz, method: st.method, discount: tt.discount, tendered: st.method === 'cash' ? num(st.tendered) : 0, tenderCur: st.cur,
+      const acctSent = (st.method === 'zaad' || st.method === 'edahab') && num(st.sent) > 0;
+      if (acctSent) {
+        change = Math.round(num(st.sent) * (st.payCur === 'USD' ? A.rate() : 1) - tt.total);
+        if (change < 0) throw new Error(t('The amount sent is less than the total'));
+      }
+      const data = { id: A.uid('S'), business: biz, method: st.method, discount: tt.discount,
+        tendered: st.method === 'cash' ? num(st.tendered) : acctSent ? num(st.sent) : 0, tenderCur: st.method === 'cash' ? st.cur : st.payCur,
         payCur: st.method === 'zaad' || st.method === 'edahab' ? st.payCur : 'SH',
         customerId: st.method === 'credit' ? st.customerId : '', orderType: biz === 'food' ? st.orderType : '', ts: new Date().toISOString(),
         items: S.cart.map(l => ({ productId: l.productId, qty: l.qty, name: l.name, unit: l.unit || '' })) };
@@ -291,7 +308,7 @@
       A.saveData();
       S.cart = []; close(); drawCartBar(); drawResults();
       S.lastSale = data;
-      toast(st.method === 'cash' && change > 0 ? t('Sale saved · Change {x}', { x: money(change) }) : t('Sale saved · {x}', { x: money(tt.total) }), 'ok', 3500);
+      toast((st.method === 'cash' || acctSent) && change > 0 ? t('Sale saved · Change {x}', { x: money(change) }) : t('Sale saved · {x}', { x: money(tt.total) }), 'ok', 3500);
       const qi = $('#q'); if (qi && window.matchMedia('(min-width: 700px)').matches) qi.focus();
     }
   }
@@ -300,7 +317,8 @@
   // Expected money per account and currency. srv = totals from the server (or null); queued items still on this phone are added.
   function liveTotals(sh, srv, moves) {
     const k0 = ['cashInSH', 'cashInUSD', 'zaadInSH', 'zaadInUSD', 'edInSH', 'edInUSD', 'custPayCash', 'custPayZaad', 'custPayEd', 'expCash', 'expZaad', 'expEd', 'expCashUSD', 'expZaadUSD', 'expEdUSD', 'refCash', 'refZaad', 'refEd',
-      'cashOutSH', 'cashOutUSD', 'cashSales', 'zaadSales', 'edSales', 'creditSales', 'saleCount', 'undoneCount'];
+      'cashOutSH', 'cashOutUSD', 'cashSales', 'zaadSales', 'edSales', 'creditSales', 'saleCount', 'undoneCount',
+      'excashSH', 'excashUSD', 'exzaadSH', 'exzaadUSD', 'exedSH', 'exedUSD', 'exCount', 'exFees'];
     const x = {}; k0.forEach(k => x[k] = srv ? num(srv[k]) : 0);
     let waiting = 0;
     S.queue.forEach(o => {
@@ -312,22 +330,29 @@
         x[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[d.method]] += tot;
         const k = { cash: 'cash', zaad: 'zaad', edahab: 'ed' }[d.method];
         if (d.method === 'cash' && d.tenderCur === 'USD' && num(d.tendered) > 0) { x.cashInUSD += num(d.tendered); x.cashInSH -= num(d.tendered) * A.rate() - tot; }
+        else if (d.method !== 'cash' && num(d.tendered) > 0) {   // sent more by Zaad/Edahab: all of it into the account, change out of the cash drawer
+          x[k + (d.tenderCur === 'USD' ? 'InUSD' : 'InSH')] += num(d.tendered); x.cashInSH -= Math.round(num(d.tendered) * (d.tenderCur === 'USD' ? A.rate() : 1) - tot);
+        }
         else if (d.method !== 'cash' && d.payCur === 'USD') x[k + 'InUSD'] += Math.ceil(tot / A.rate() * 100) / 100;
         else x[k + 'InSH'] += tot;
       } else if (o.action === 'cust.pay' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['custPay' + k] += num(o.data.amount); waiting++; } }
       else if (o.action === 'exp.create' && o.userId === S.user.id) { const k = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }[o.data.method]; if (k) { x['exp' + k + (o.data.currency === 'USD' ? 'USD' : '')] += num(o.data.amount); waiting++; } }
       else if (o.action === 'cash.out') { x[o.data.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num(o.data.amount); waiting++; }
+      else if (o.action === 'exch.create') {
+        const d = o.data, acct = d.account === 'edahab' ? 'ed' : 'zaad', rIn = d.dir === 'out' ? 'cash' : acct, gOut = d.dir === 'out' ? acct : 'cash';
+        x['ex' + rIn + (d.recvCur === 'USD' ? 'USD' : 'SH')] += num(d.recvAmount); x['ex' + gOut + (d.giveCur === 'USD' ? 'USD' : 'SH')] -= num(d.giveAmount); x.exCount++; waiting++;
+      }
     });
     const r2 = v => Math.round(v * 100) / 100;
-    x.eCashSH = num(sh.openCash) + x.cashInSH + x.custPayCash - x.expCash - x.refCash - x.cashOutSH;
-    x.eCashUSD = r2(num(sh.openCashUSD) + x.cashInUSD - x.cashOutUSD - x.expCashUSD);
-    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD - x.expZaadUSD);
-    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD - x.expEdUSD);
+    x.eCashSH = num(sh.openCash) + x.cashInSH + x.custPayCash - x.expCash - x.refCash - x.cashOutSH + x.excashSH;
+    x.eCashUSD = r2(num(sh.openCashUSD) + x.cashInUSD - x.cashOutUSD - x.expCashUSD + x.excashUSD);
+    x.eZaadSH = num(sh.openZaadSH) + x.zaadInSH + x.custPayZaad - x.expZaad - x.refZaad + x.exzaadSH; x.eZaadUSD = r2(num(sh.openZaadUSD) + x.zaadInUSD - x.expZaadUSD + x.exzaadUSD);
+    x.eEdSH = num(sh.openEdSH) + x.edInSH + x.custPayEd - x.expEd - x.refEd + x.exedSH; x.eEdUSD = r2(num(sh.openEdUSD) + x.edInUSD - x.expEdUSD + x.exedUSD);
     x.totalSH = x.eCashSH + x.eZaadSH + x.eEdSH; x.totalUSD = r2(x.eCashUSD + x.eZaadUSD + x.eEdUSD);
     x.waiting = waiting; x.rate = num(sh.rate) || A.rate();
     return x;
   }
-  const usdF = v => '$' + (Math.round(num(v) * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const usdF = v => { const n = Math.round(num(v) * 100) / 100; return '$' + n.toLocaleString('en-US', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 }); };
   Screens.shift = function (main) {
     const sh = myShift();
     const others = (S.data.shifts || []).filter(s => s.status === 'open' && s.business === S.biz && s.userId !== S.user.id);
@@ -351,12 +376,13 @@
     } else {
       main.innerHTML = `<div class="card navy"><div class="row"><div class="grow"><div class="small muted">${esc(t('Expected in the drawer now'))}</div><div class="big" id="expNow" style="color:var(--gold)">…</div></div>
           <span class="pill green">${esc(t('Open'))}</span></div><div class="small muted" style="margin-top:4px">${esc(t('Started'))} ${A.when(sh.openTs)}</div></div>
-        ${can('cashOut') ? `<button class="btn block" id="co" style="margin-bottom:6px">${I('wallet')}${esc(t('Take cash out'))}</button>` : ''}
-        <div id="moves"></div><div id="mysales"></div>
+        ${can('cashOut') || can('exchange') ? `<div class="grid2" style="margin-bottom:6px">${can('cashOut') ? `<button class="btn block" id="co">${I('wallet')}${esc(t('Take cash out'))}</button>` : ''}${can('exchange') ? `<button class="btn gold block" id="exb">${I('swap')}${esc(t('Exchange'))}</button>` : ''}</div>` : ''}
+        <div id="exch"></div><div id="moves"></div><div id="mysales"></div>
         <div class="card" id="endc"><h3 style="margin-top:0">${esc(t('End shift — count and type'))}</h3><div id="cmp"></div>
           <label class="f" style="margin-top:10px"><span>${esc(t('Note'))}</span><input class="in" name="note" id="cnote"></label>
           <button class="btn red block lg" id="endBtn">${I('lock')}${esc(t('End shift'))}</button></div>`;
       if ($('#co')) $('#co').onclick = () => cashOutSheet(() => loadLive(sh));
+      if ($('#exb')) $('#exb').onclick = () => exchangeSheet(() => loadLive(sh));
       $('#endBtn').onclick = e => withBusy(e.target.closest('button'), () => closeShift(sh));
       loadLive(sh);
     }
@@ -375,6 +401,7 @@
       const allMoves = moves.concat(qMoves);
       $('#moves').innerHTML = allMoves.length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${allMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div>
         <div class="sub">${m.pending ? esc(t('Waiting to send')) : A.when(m.ts)} · ${esc(t(m.reason || ''))}${m.userName ? ' · ' + esc(t('recorded by {n}', { n: m.userName })) : ''}</div></div></div>`).join('')}</div>` : '';
+      drawExchanges(sh, (r && r.exchanges) || [], x);
       drawCompare(sh, x);
       drawMySales(sh, (r && r.sales) || []);
     };
@@ -471,6 +498,74 @@
         close(); toast(t('Sale undone'), 'ok'); done && done();
       } }] });
     $$('#rs .chip', sh.el).forEach(c => c.onclick = () => { reason = c.dataset.r; $$('#rs .chip', sh.el).forEach(x => x.classList.toggle('on', x === c)); });
+  }
+  /* ---------- Exchange: Zaad/Edahab <-> cash, no sale ---------- */
+  const exAmt = (v, cur) => cur === 'USD' ? usdF(v) : money(v);
+  function exTitle(x) {
+    const acc = A.methodName(x.account);
+    return (x.dir === 'out' ? t('Cash → {a}', { a: acc }) : t('{a} → Cash', { a: acc })) + ' · ' + exAmt(x.recvAmount, x.recvCur);
+  }
+  function drawExchanges(sh, srv, x) {
+    const box = $('#exch'); if (!box) return;
+    const q = S.queue.filter(o => o.action === 'exch.create' && o.data.business === sh.business).map(o => Object.assign({ pending: 1, ts: o.ts, userName: o.userName, status: 'done' }, o.data));
+    const list = q.reverse().concat(srv.filter(e => !q.some(z => z.id === e.id)));
+    if (!list.length) { box.innerHTML = ''; return; }
+    const net = [['CASH SH', x.excashSH, 'SH'], ['CASH USD', x.excashUSD, 'USD'], ['ZAAD', x.exzaadSH, 'SH'], ['ZAAD USD', x.exzaadUSD, 'USD'], ['EDAHAB', x.exedSH, 'SH'], ['EDAHAB USD', x.exedUSD, 'USD']].filter(n => Math.abs(num(n[1])) > 0.001);
+    box.innerHTML = `<h3>${esc(t('Exchanges'))}</h3><div class="list">${list.map(e => {
+      const gone = e.status === 'undone', acc = A.methodName(e.account);
+      const got = e.dir === 'out' ? t('Got {a} cash, sent {b} {c}', { a: exAmt(e.recvAmount, e.recvCur), b: exAmt(e.giveAmount, e.giveCur), c: acc }) : t('Got {a} {c}, gave {b} cash', { a: exAmt(e.recvAmount, e.recvCur), b: exAmt(e.giveAmount, e.giveCur), c: acc });
+      const mine = e.userName === S.user.name || isOwner();
+      return `<div class="li lead ${gone ? 'gone' : ''}" data-id="${esc(e.id)}"><span class="av ${e.dir === 'out' ? 'green' : 'gold'}">${I('swap')}</span><div class="main"><div class="name ${gone ? 'strike' : ''}">${esc(exTitle(e))}${gone ? ` <span class="pill red">${esc(t('Undone'))}</span>` : ''}</div>
+        <div class="sub">${e.pending ? esc(t('Waiting to send')) : A.when(e.ts)} · ${esc(got)}${num(e.fee) > 0 ? ' · ' + esc(t('shop kept {x}', { x: fmt(e.fee) })) : ''}${e.customer ? ' · ' + esc(e.customer) : ''}</div></div>
+        ${!gone && mine ? `<button class="btn sm text" data-exu>${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div>`; }).join('')}</div>
+      ${net.length ? `<div class="eff">${net.map(n => `<div><small>${esc(t(n[0]))}</small><b class="${n[1] > 0 ? 'up' : 'dn'}">${n[1] > 0 ? '+' : '−'}${n[2] === 'USD' ? usdF(Math.abs(n[1])) : fmt(Math.abs(n[1]))}</b></div>`).join('')}</div>` : ''}`;
+    $$('#exch [data-exu]').forEach(b => b.onclick = async () => {
+      const id = b.closest('[data-id]').dataset.id, e = list.find(z => z.id === id);
+      if (!(await confirmBox(t('Undo this exchange?') + '\n' + exTitle(e), t('Undo'), 'red'))) return;
+      const qi = S.queue.findIndex(o => o.action === 'exch.create' && o.data.id === id);
+      try {
+        if (qi >= 0) { S.queue.splice(qi, 1); A.LS.set('queue', S.queue); }
+        else { needOnline(); await api('exch.undo', { id }); }
+        toast(t('Exchange undone'), 'ok'); loadLive(sh, true);
+      } catch (err) { toast(err.message, 'err'); }
+    });
+  }
+  function exchangeSheet(done) {
+    let dir = 'in', acct = 'zaad', rc = 'SH', gc = 'SH', giveTouched = false;
+    const sh = sheet({ title: t('Exchange'), body: `
+      <div class="opt on" data-dir="in"><span class="rd"></span><div><b>${esc(t('Customer sends Zaad / Edahab, takes cash'))}</b><span class="s">${esc(t('Money comes into the account, cash leaves the drawer'))}</span></div></div>
+      <div class="opt" data-dir="out"><span class="rd"></span><div><b>${esc(t('Customer gives cash, gets Zaad / Edahab'))}</b><span class="s">${esc(t('Cash comes into the drawer, we send from the account'))}</span></div></div>
+      <label class="f" style="margin-top:6px"><span>${esc(t('Account'))}</span><div class="seg" id="xacc"><button data-v="zaad" class="on">Zaad</button><button data-v="edahab">Edahab</button></div></label>
+      <label class="f"><span id="xrl"></span><div class="row"><input class="in big grow" id="xr" inputmode="decimal" placeholder="0" autofocus><div class="seg" id="xrc" style="flex:0 0 130px;flex-wrap:nowrap"><button data-v="SH" class="on">SH</button><button data-v="USD">USD</button></div></div></label>
+      <label class="f"><span id="xgl"></span><div class="row"><input class="in big grow" id="xg" inputmode="decimal" placeholder="0"><div class="seg" id="xgc" style="flex:0 0 130px;flex-wrap:nowrap"><button data-v="SH" class="on">SH</button><button data-v="USD">USD</button></div></div></label>
+      <div class="eq" id="xfee"></div>
+      ${input('customer', t('Customer (optional)'), '', 'placeholder="' + esc(t('Name or phone')) + '"')}
+      <div class="eff" id="xeff"></div>`,
+      actions: [{ label: t('Cancel'), cls: 'ghost' }, { label: t('Save exchange'), cls: 'gold', onClick: close => {
+        const r = num($('#xr', sh.el).value), g = num($('#xg', sh.el).value);
+        if (!(r > 0) || !(g > 0)) throw new Error(t('Enter both amounts'));
+        if (fee() < -Math.max(100, A.rate() * 0.01)) throw new Error(t('You would give more than you received'));
+        enqueue('exch.create', { id: A.uid('EX'), business: S.biz, dir, account: acct, recvAmount: r, recvCur: rc, giveAmount: g, giveCur: gc, customer: $('[name=customer]', sh.el).value.trim() });
+        close(); toast(t('Exchange saved'), 'ok'); done && done();
+      } }] });
+    const el = sh.el, val = (v, c) => num(v) * (c === 'USD' ? A.rate() : 1);
+    const fee = () => Math.round(val($('#xr', el).value, rc) - val($('#xg', el).value, gc));
+    const upd = () => {
+      const acc = acct === 'edahab' ? 'Edahab' : 'Zaad';
+      $('#xrl', el).textContent = dir === 'in' ? t('{a} received', { a: acc }) : t('Cash received');
+      $('#xgl', el).textContent = dir === 'in' ? t('Cash given') : t('{a} sent', { a: acc });
+      if (!giveTouched) { const r = num($('#xr', el).value); $('#xg', el).value = r ? (rc === gc ? r : gc === 'USD' ? Math.round(r / A.rate() * 100) / 100 : Math.round(r * A.rate())) : ''; }
+      const f = fee(), r = num($('#xr', el).value), g = num($('#xg', el).value);
+      $('#xfee', el).innerHTML = !r || !g ? esc(t('Leave the same amount for no fee.')) : f > 0 ? t('Shop keeps <b>{x}</b> (fee)', { x: esc(money(f)) }) : f < -Math.max(100, A.rate() * 0.01) ? `<span class="red">${esc(t('You would give more than you received'))}</span>` : esc(t('No fee'));
+      const into = dir === 'in' ? acc.toUpperCase() : t('CASH DRAWER'), outOf = dir === 'in' ? t('CASH DRAWER') : acc.toUpperCase();
+      $('#xeff', el).innerHTML = r && g ? `<div><small>${esc(into)}</small><b class="up">+${rc === 'USD' ? usdF(r) : fmt(r)}</b></div><div><small>${esc(outOf)}</small><b class="dn">−${gc === 'USD' ? usdF(g) : fmt(g)}</b></div>` : '';
+    };
+    $$('.opt', el).forEach(o => o.onclick = () => { dir = o.dataset.dir; $$('.opt', el).forEach(x => x.classList.toggle('on', x === o)); upd(); });
+    seg($('#xacc', el), v => { acct = v; upd(); });
+    seg($('#xrc', el), v => { rc = v; upd(); });
+    seg($('#xgc', el), v => { gc = v; giveTouched = false; upd(); });
+    $('#xr', el).oninput = upd; $('#xg', el).oninput = () => { giveTouched = true; upd(); };
+    upd();
   }
   function cashOutSheet(done) {
     const owners = A.LS.get('names', []).filter(u => u.business === 'both').map(u => u.name);
@@ -730,6 +825,7 @@
       ${(r.shifts || []).length ? `<h3>${esc(t('Shifts today'))}</h3><div class="list">${r.shifts.slice().reverse().map(x => `<div class="li lead"><span class="av ${x.status === 'open' ? 'green' : 'gray'}">${I(x.status === 'open' ? 'clock' : 'lock')}</span><div class="main">
         <div class="name">${esc(x.userName)} · ${esc(A.bizName(x.business))}</div><div class="sub">${esc(t('Started'))} <b>${String(x.openTs).slice(11, 16)}</b>${x.scheduled ? ' · ' + esc(t('scheduled {t}', { t: x.scheduled })) : ''}${x.closeTs ? ' · ' + esc(t('ended')) + ' ' + String(x.closeTs).slice(11, 16) + (x.worked !== '' ? ' · ' + Math.floor(x.worked / 60) + 'h ' + (x.worked % 60) + 'm' : '') : ''}</div>
         <div style="margin-top:4px">${x.lateBy ? `<span class="pill gold">${esc(t('{n} min late', { n: x.lateBy }))}</span>` : `<span class="pill green">${esc(t('On time'))}</span>`} ${x.status === 'open' ? `<span class="pill green">${esc(t('Open'))}</span>` : diffTxt(x.diffAll !== '' && x.diffAll !== undefined ? x.diffAll : x.diffCash)}</div></div></div>`).join('')}</div>` : ''}
+      ${(r.exchanges || []).length ? `<h3>${esc(t('Exchanges'))}</h3><div class="list">${r.exchanges.map(e => `<div class="li lead"><span class="av ${e.dir === 'out' ? 'green' : 'gold'}">${I('swap')}</span><div class="main"><div class="name">${esc(exTitle(e))}</div><div class="sub">${A.when(e.ts)} · ${esc(e.userName)}${num(e.fee) > 0 ? ' · ' + esc(t('shop kept {x}', { x: fmt(e.fee) })) : ''}${e.customer ? ' · ' + esc(e.customer) : ''}</div></div></div>`).join('')}</div>` : ''}
       ${(r.cashMoves || []).length ? `<h3>${esc(t('Cash taken out'))}</h3><div class="list">${r.cashMoves.map(m => `<div class="li lead"><span class="av gold">${I('wallet')}</span><div class="main"><div class="name">${esc(m.takenBy)} · ${m.currency === 'USD' ? usdF(m.amount) : money(m.amount)}</div><div class="sub">${A.when(m.ts)} · ${esc(t(m.reason || ''))} · ${esc(t('recorded by {n}', { n: m.userName }))}</div></div></div>`).join('')}</div>` : ''}
       <h3>${esc(t('Money in shifts'))}</h3><div class="list">${r.balances.map(b => `
         ${b.open.map(o => `<div class="li lead"><span class="av green">${I('clock')}</span><div class="main"><div class="name">${esc(A.bizName(b.business))} · ${esc(o.userName)}</div>
@@ -903,7 +999,10 @@
     const sh = sheet({ title: isNew ? t('New product') : p.name, body: `<form id="f">
       ${input('name', t('Name'), p.name, (mp ? '' : 'readonly ') + 'required')}
       <label class="f"><span>${esc(t('Barcode'))}</span><div class="row"><input class="in grow" name="barcode" value="${esc(p.barcode || '')}" inputmode="numeric" ${mp ? '' : 'readonly'}>${mp ? `<button type="button" class="iconbtn tonal" id="sb">${I('scan')}</button>` : ''}</div></label>
-      <div class="grid2">${moneyInput('price', t('Selling price (SH)'), p.price, isNew || cp ? 'required' : 'readonly')}${showCost ? moneyInput('cost', t('Cost price (SH)'), p.cost, isNew || cp ? '' : 'readonly') : ''}</div>
+      <label class="f"><span>${esc(t('Price in'))}</span><div class="seg" id="pcurP"><button type="button" data-v="SH" class="${p.priceCur === 'USD' ? '' : 'on'}" ${isNew || cp ? '' : 'disabled'}>${esc(t('Shillings (SH)'))}</button><button type="button" data-v="USD" class="${p.priceCur === 'USD' ? 'on' : ''}" ${isNew || cp ? '' : 'disabled'}>${esc(t('Dollars (USD)'))}</button></div></label>
+      <div id="shP" class="grid2">${moneyInput('price', t('Selling price (SH)'), p.price, isNew || cp ? '' : 'readonly')}${showCost ? moneyInput('cost', t('Cost price (SH)'), p.cost, isNew || cp ? '' : 'readonly') : ''}</div>
+      <div id="usdP" class="hidden"><div class="grid2">${input('priceUSD', t('Selling price ($)'), p.priceUSD || '', 'inputmode="decimal" ' + (isNew || cp ? '' : 'readonly'))}${showCost ? input('costUSD', t('Cost price ($)'), p.costUSD || '', 'inputmode="decimal" ' + (isNew || cp ? '' : 'readonly')) : ''}</div>
+        <div class="eq" id="usdEq"></div></div>
       <label class="f"><span>${esc(t('Category'))}</span><input class="in" name="category" list="cats" value="${esc(p.category || '')}" ${mp ? '' : 'readonly'}><datalist id="cats">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist></label>
       ${!food ? `<div class="card ring lzcard"><label class="row lzsw" style="align-items:center;gap:12px;margin:0"><div class="grow"><b>${esc(t('Sell loose (pieces)'))}</b><div class="small muted" id="lzd"></div></div>
           <input type="checkbox" class="sw" name="loose" ${A.isLoose(p) ? 'checked' : ''} ${mp ? '' : 'disabled'}></label><div id="lzb"></div></div>
@@ -912,7 +1011,7 @@
       ${mp ? `<label class="chk"><input type="checkbox" name="fav" ${num(p.fav) ? 'checked' : ''}><span class="main">${esc(t('Always show on the sell screen'))}</span></label>
       ${!isNew ? `<label class="chk"><input type="checkbox" name="active" ${String(p.active) !== '0' ? 'checked' : ''}><span class="main">${esc(t('Active (can be sold)'))}</span></label>` : ''}` : ''}
       ${!isNew ? `<p class="small muted">${esc(t('Sold so far'))}: ${fmt(p.sold)}</p>` : ''}</form>`,
-      onOpen: el => { const sb = $('#sb', el); if (sb) sb.onclick = async () => { const c = await A.scanOnce(); if (c) $('[name=barcode]', el).value = c; }; if (!food) looseForm(el, p, isNew, mp, cp, showCost); },
+      onOpen: el => { const sb = $('#sb', el); if (sb) sb.onclick = async () => { const c = await A.scanOnce(); if (c) $('[name=barcode]', el).value = c; }; usdPriceForm(el, p, showCost); if (!food) looseForm(el, p, isNew, mp, cp, showCost); },
       actions: [!isNew && can('deleteProducts') ? { label: t('Delete'), cls: 'red', icon: 'trash', onClick: async close => {
         needOnline();
         if (!(await confirmBox(t('Delete {n}? Old sales and reports keep its name.', { n: p.name }), t('Delete'), 'red'))) return;
@@ -924,6 +1023,12 @@
         const f = formData($('#f', el));
         const d = { id: isNew ? '' : p.id, business: p.business || S.biz, name: f.name, barcode: f.barcode, price: num(f.price), category: f.category, lowStock: f.lowStock, expiry: f.expiry || '', fav: f.fav, active: isNew ? 1 : f.active };
         if (showCost) d.cost = num(f.cost);
+        if (el._usd()) {
+          const pu = Math.round(parseFloat(String(f.priceUSD).replace(/,/g, '')) * 100) / 100;
+          if (!(pu > 0)) throw new Error(t('Enter the price in dollars'));
+          Object.assign(d, { priceCur: 'USD', priceUSD: pu, price: Math.round(pu * A.rate()) });
+          if (showCost) d.costUSD = f.costUSD === '' ? '' : Math.round(parseFloat(String(f.costUSD).replace(/,/g, '')) * 100) / 100;
+        } else d.priceCur = 'SH';
         if (!food) {
           const lz = el._lz();
           Object.assign(d, { loose: lz.on ? 1 : 0, perPack: lz.per, looseTable: lz.rows, stock: lz.stock });
@@ -934,6 +1039,23 @@
         A.upsert('products', r.product); toast(t('Saved'), 'ok'); close(); if (done) done();
       } }] : []) });
     return sh;
+  }
+  // "Price in SH / USD": a dollar price is turned into shillings at today's rate (and again by the server when the rate changes).
+  function usdPriceForm(el, p, showCost) {
+    let usd = p.priceCur === 'USD';
+    const put = (n, v) => { const i = $(`[name=${n}]`, el); if (i) { i.value = v; i.dispatchEvent(new Event('input')); } };
+    const upd = () => {
+      $('#shP', el).classList.toggle('hidden', usd); $('#usdP', el).classList.toggle('hidden', !usd);
+      if (!usd) return;
+      const rate = A.rate(), pu = parseFloat(String($('[name=priceUSD]', el).value).replace(/,/g, '')) || 0, cu = showCost ? parseFloat(String($('[name=costUSD]', el).value).replace(/,/g, '')) || 0 : 0;
+      if (pu) put('price', Math.round(pu * rate)); if (cu) put('cost', Math.round(cu * rate));
+      $('#usdEq', el).innerHTML = pu ? t('Today: <b>{u} = {s}</b>', { u: esc(usdF(pu)), s: esc(money(Math.round(pu * rate))) }) + (cu ? ' · ' + esc(t('cost {c} · profit {p}', { c: fmt(Math.round(cu * rate)), p: fmt(Math.round((pu - cu) * rate)) })) : '') +
+        `<br>${esc(t('(1 USD = {r} — from Settings). When the rate changes, this price changes by itself.', { r: fmt(rate) }))}` : esc(t('1 USD = {r} (from Settings)', { r: fmt(rate) }));
+    };
+    seg($('#pcurP', el), v => { usd = v === 'USD'; if (usd && !$('[name=priceUSD]', el).value && num($('[name=price]', el).value)) { $('[name=priceUSD]', el).value = Math.round(num($('[name=price]', el).value) / A.rate() * 100) / 100; } upd(); });
+    ['priceUSD', 'costUSD'].forEach(n => { const i = $(`[name=${n}]`, el); if (i) i.oninput = upd; });
+    el._usd = () => usd;
+    upd();
   }
   // The "Sell loose" part of the product form: switch, pieces per packet, price list for pieces, and stock as packets + pieces.
   function looseForm(el, p, isNew, mp, cp, showCost) {
@@ -1411,7 +1533,7 @@
     manageProducts: 'Add and edit products and ingredients', discount: 'Give discounts', customers: 'Credit customers and debt payments', suppliers: 'Suppliers and purchases',
     expenses: 'Expenses tab (see and add expenses)', ingredients: 'Enter ingredient usage', stockCount: 'Do stock counts', approveRefunds: 'Approve refunds',
     manageUsers: 'Manage users and PINs', settings: 'Change settings', export: 'Export data (CSV)', audit: 'See the audit log',
-    undoSales: 'Undo own sales in their shift', cashOut: 'Record cash taken out of the drawer', voidSales: 'Void any sale (any time)',
+    undoSales: 'Undo own sales in their shift', cashOut: 'Record cash taken out of the drawer', exchange: 'Exchange Zaad/Edahab ↔ cash', voidSales: 'Void any sale (any time)',
     deleteProducts: 'Delete products', deleteCustomers: 'Delete customers (no debt only)', deleteSuppliers: 'Delete suppliers (nothing owed only)',
     viewInsights: 'See the Insights page', emailReports: 'Get email reports (and choose how often)'
   };

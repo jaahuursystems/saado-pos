@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.4.0';
+var VERSION = '1.5.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -20,7 +20,7 @@ var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
 var SCHEMA = {
   Settings:   ['key', 'value', 'note'],
   Users:      ['id', 'name', 'role', 'business', 'pinHash', 'salt', 'active', 'lang', 'afterHours', 'perms', 'createdAt', 'pinChanged'],
-  Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt', 'lowAlerted', 'deleted', 'loose', 'perPack', 'looseTable'],
+  Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt', 'lowAlerted', 'deleted', 'loose', 'perPack', 'looseTable', 'priceCur', 'priceUSD', 'costUSD'],
   Sales:      ['id', 'ts', 'date', 'business', 'userId', 'userName', 'shiftId', 'method', 'orderType', 'customerId', 'customerName', 'subtotal', 'discount', 'total', 'cost', 'tendered', 'tenderCur', 'change', 'status', 'refunded', 'note',
                'payCur', 'usdAmount', 'undoneBy', 'undoneTs', 'undoReason'],
   SaleItems:  ['saleId', 'date', 'business', 'productId', 'name', 'qty', 'price', 'cost', 'lineTotal', 'unit'],
@@ -43,6 +43,8 @@ var SCHEMA = {
   StockLog:   ['id', 'ts', 'date', 'business', 'productId', 'name', 'type', 'before', 'after', 'diff', 'userName', 'note'],
   Audit:      ['ts', 'userName', 'action', 'details'],
   CashMoves:  ['id', 'ts', 'date', 'business', 'shiftId', 'amount', 'currency', 'takenBy', 'reason', 'note', 'userName'],
+  // dir 'in' = customer sends Zaad/Edahab and takes cash; 'out' = customer gives cash and gets Zaad/Edahab
+  Exchanges:  ['id', 'ts', 'date', 'business', 'shiftId', 'dir', 'account', 'recvAmount', 'recvCur', 'giveAmount', 'giveCur', 'fee', 'customer', 'userName', 'status', 'undoneBy', 'undoneTs'],
   Recipients: ['id', 'name', 'email', 'userId', 'daily', 'weekly', 'monthly', 'lowStock', 'active', 'createdAt'],
   MonthlySummary: ['month', 'business', 'count', 'sales', 'refunds', 'netSales', 'cost', 'expenses', 'profit', 'cash', 'zaad', 'edahab', 'credit', 'updatedAt']
 };
@@ -89,7 +91,7 @@ var DEFAULT_SETTINGS = {
 var PROTECTED_SETTINGS = { dataVersion: 1, archivedUntil: 1, archiveLinks: 1, permsV2: 1, emailSent: 1 };
 
 var PERMS = ['viewReports', 'viewProfit', 'viewStock', 'changePrices', 'manageProducts', 'discount', 'customers', 'suppliers',
-             'undoSales', 'cashOut', 'voidSales', 'deleteProducts', 'deleteCustomers', 'deleteSuppliers', 'viewInsights', 'emailReports',
+             'undoSales', 'cashOut', 'exchange', 'voidSales', 'deleteProducts', 'deleteCustomers', 'deleteSuppliers', 'viewInsights', 'emailReports',
              'expenses', 'ingredients', 'stockCount', 'approveRefunds', 'manageUsers', 'settings', 'export', 'audit'];
 var EMPLOYEE_DEFAULT_PERMS = ['viewStock', 'customers', 'expenses', 'ingredients', 'undoSales', 'cashOut'];
 var GONE = { undone: 1, void: 1 };   // sale status that no longer counts
@@ -510,6 +512,7 @@ var ACTIONS = {
       var p = find_('Products', it.productId);
       if (!p || p.business !== biz) throw new Error('Product not found: ' + (it.name || it.productId));
       var q = num_(it.qty); if (q <= 0) throw new Error('Wrong quantity for ' + p.name);
+      if (isUsd_(p)) { var nowPrice = Math.round(num_(p.priceUSD) * rate_()); if (nowPrice !== num_(p.price)) { p.price = nowPrice; if (num_(p.costUSD) > 0) p.cost = Math.round(num_(p.costUSD) * rate_()); } }
       var unit = it.unit === 'pc' && isLoose_(p) ? 'pc' : '';
       var price = num_(p.price), c = num_(p.cost), line = price * q;
       if (unit === 'pc') { q = Math.floor(q); line = loosePrice_(p, q); price = Math.round(line / q * 100) / 100; c = Math.round(num_(p.cost) / num_(p.perPack) * 100) / 100; }
@@ -535,6 +538,12 @@ var ACTIONS = {
       if (cur === 'USD') { payCur = 'USD'; usdAmount = tendered; }       // dollars go in the drawer, change comes out in SH
     }
     if ((method === 'zaad' || method === 'edahab') && d.payCur === 'USD') { payCur = 'USD'; usdAmount = Math.ceil(total / rate_() * 100) / 100; }
+    // Customer sent MORE by Zaad/Edahab than the total: the whole amount goes into the account, the change comes out of the cash drawer (in SH).
+    if ((method === 'zaad' || method === 'edahab') && tendered > 0) {
+      change = Math.round((cur === 'USD' ? tendered * rate_() : tendered) - total);
+      if (change < 0) throw new Error('The amount sent is less than the total');
+      payCur = cur; usdAmount = cur === 'USD' ? tendered : 0;
+    } else if (method !== 'cash') { tendered = 0; change = 0; }
     var orderType = biz === 'food' ? str_(d.orderType || 'Take away', 40) : '';
     var sale = { id: id, ts: ts, date: dateOf_(ts), business: biz, userId: u.id, userName: u.name, shiftId: shift ? shift.id : '',
                  method: method, orderType: orderType, customerId: cust ? cust.id : '', customerName: cust ? cust.name : '',
@@ -598,13 +607,14 @@ var ACTIONS = {
     if (s.userId !== u.id && !isOwner_(u)) throw new Error('NOPERM: not your shift');
     var since = String(s.date || dateOf_(s.openTs)).slice(0, 10);
     var moves = recent_('CashMoves', since).filter(function (m) { return m.shiftId === s.id; }).map(clean_);
+    var exchanges = recent_('Exchanges', since).filter(function (m) { return m.shiftId === s.id; }).map(clean_).reverse();
     var sales = recent_('Sales', since).filter(function (x) { return x.shiftId === s.id; });
     var ids = {}; sales.forEach(function (x) { ids[x.id] = []; });
     recent_('SaleItems', since).forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit }); });
     var list = sales.slice(-60).reverse().map(function (x) {
       return { id: x.id, ts: x.ts, method: x.method, total: x.total, status: x.status, customerName: x.customerName, userId: x.userId, items: ids[x.id] };
     });
-    return { ok: true, totals: shiftTotals_(s), moves: moves, shift: clean_(s), sales: list };
+    return { ok: true, totals: shiftTotals_(s), moves: moves, exchanges: exchanges, shift: clean_(s), sales: list };
   },
 
   'shift.close': function (u, d) {
@@ -706,7 +716,7 @@ var ACTIONS = {
       } else {
         var p = find_('Products', it.refId); if (!p || p.business !== s.business) throw new Error('Product not found');
         var add = pieces_(p, q, 'pk');   // bought in packets
-        var before = num_(p.stock); p.stock = before + add; if (c > 0) p.cost = c; p.updatedAt = now; update_('Products', p);
+        var before = num_(p.stock); p.stock = before + add; if (c > 0) { p.cost = c; if (isUsd_(p)) p.costUSD = Math.round(c / rate_() * 100) / 100; } p.updatedAt = now; update_('Products', p);
         insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'purchase',
                               before: before, after: p.stock, diff: add, userName: u.name, note: s.name });
         desc.push({ kind: 'p', id: p.id, name: p.name, qty: q, cost: c });
@@ -881,6 +891,36 @@ var ACTIONS = {
               takenBy: who, reason: str_(d.reason, 60), note: str_(d.note, 200), userName: u.name };
     insert_('CashMoves', m); audit_(u, 'cash.out', { amount: amt, currency: m.currency, takenBy: who, reason: m.reason });
     return { ok: true, move: clean_(m) };
+  },
+
+  /* ---------- exchange Zaad/Edahab <-> cash (no sale) ---------- */
+  'exch.create': function (u, d) {
+    need_(u, 'exchange');
+    if (exists_('Exchanges', d.id)) return { ok: true, dup: true };
+    var biz = d.business; needBiz_(u, biz);
+    var acct = d.account === 'edahab' ? 'edahab' : 'zaad', dir = d.dir === 'out' ? 'out' : 'in';
+    var rc = d.recvCur === 'USD' ? 'USD' : 'SH', gc = d.giveCur === 'USD' ? 'USD' : 'SH';
+    var r = rc === 'USD' ? Math.round(num_(d.recvAmount) * 100) / 100 : Math.round(num_(d.recvAmount));
+    var g = gc === 'USD' ? Math.round(num_(d.giveAmount) * 100) / 100 : Math.round(num_(d.giveAmount));
+    if (!(r > 0) || !(g > 0)) throw new Error('Enter both amounts');
+    var rate = rate_(), fee = Math.round((rc === 'USD' ? r * rate : r) - (gc === 'USD' ? g * rate : g));
+    if (fee < -Math.max(100, rate * 0.01)) throw new Error('You would give more than you received');
+    var shift = openShift_(u, biz) || anyOpenShift_(biz);
+    if (!shift) throw new Error('Start a shift first');
+    var x = { id: d.id || uid_('EX'), ts: nowIso_(), date: today_(), business: biz, shiftId: shift.id, dir: dir, account: acct,
+              recvAmount: r, recvCur: rc, giveAmount: g, giveCur: gc, fee: Math.max(0, fee), customer: str_(d.customer, 60), userName: u.name, status: 'done' };
+    insert_('Exchanges', x); audit_(u, 'exchange', { dir: dir, account: acct, recv: r + ' ' + rc, give: g + ' ' + gc });
+    return { ok: true, exchange: clean_(x) };
+  },
+  // Undo an exchange while its shift is still open (the person who wrote it, or an owner). The row stays, marked "undone".
+  'exch.undo': function (u, d) {
+    var x = find_('Exchanges', d.id); if (!x) throw new Error('Not found (it may still be syncing)');
+    if (x.status === 'undone') return { ok: true, dup: true };
+    if (x.userName !== u.name && !isOwner_(u)) throw new Error('NOPERM: only the person who wrote it or the owner can undo it');
+    var s = find_('Shifts', x.shiftId); if (!s || s.status !== 'open') throw new Error('This shift is closed. It can no longer be undone.');
+    x.status = 'undone'; x.undoneBy = u.name; x.undoneTs = nowIso_(); update_('Exchanges', x);
+    audit_(u, 'exch.undo', { id: x.id });
+    return { ok: true, exchange: clean_(x) };
   },
 
   /* ---------- delete (owner, or users with the delete permissions) ----------
@@ -1080,6 +1120,13 @@ var ACTIONS = {
     var p = d.id ? find_('Products', d.id) : null;
     var biz = p ? p.business : d.business; needBiz_(u, biz);
     var name = str_(d.name, 100); if (!name) throw new Error('Name is required');
+    // Priced in dollars: the shilling price/cost are worked out from today's rate (and again whenever the rate changes).
+    var usd = d.priceCur === 'USD';
+    if (usd) {
+      if (!(num_(d.priceUSD) > 0)) throw new Error('Enter the price in dollars');
+      d.priceUSD = Math.round(num_(d.priceUSD) * 100) / 100; d.price = Math.round(d.priceUSD * rate_());
+      if (d.costUSD !== undefined && d.costUSD !== '') { d.costUSD = Math.round(num_(d.costUSD) * 100) / 100; d.cost = Math.round(d.costUSD * rate_()); }
+    }
     var barcode = str_(d.barcode, 60);
     if (barcode) table_('Products').rows.forEach(function (x) { if (x.barcode === barcode && x.business === biz && (!p || x.id !== p.id)) throw new Error('Barcode already used by ' + x.name); });
     var now = nowIso_();
@@ -1087,7 +1134,8 @@ var ACTIONS = {
       need_(u, 'manageProducts');
       p = { id: d.id || uid_('P'), business: biz, name: name, barcode: barcode, category: str_(d.category, 40), price: num_(d.price), cost: num_(d.cost),
             stock: biz === 'shop' ? num_(d.stock) : '', lowStock: d.lowStock === '' || d.lowStock === undefined ? num_(setting_('defaultLowStock')) : num_(d.lowStock),
-            expiry: str_(d.expiry, 10), active: 1, fav: isOn_(d.fav) ? 1 : 0, sold: 0, updatedAt: now, loose: '', perPack: '', looseTable: '' };
+            expiry: str_(d.expiry, 10), active: 1, fav: isOn_(d.fav) ? 1 : 0, sold: 0, updatedAt: now, loose: '', perPack: '', looseTable: '',
+            priceCur: usd ? 'USD' : '', priceUSD: usd ? d.priceUSD : '', costUSD: usd && d.costUSD !== undefined ? d.costUSD : '' };
       setLoose_(p, d);
       insert_('Products', p);
       if (biz === 'shop' && num_(p.stock)) insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: biz, productId: p.id, name: p.name, type: 'new', before: 0, after: p.stock, diff: p.stock, userName: u.name, note: '' });
@@ -1095,7 +1143,8 @@ var ACTIONS = {
     } else {
       var lz = { loose: p.loose, perPack: p.perPack, looseTable: p.looseTable }; if (d.loose !== undefined) setLoose_(lz, Object.assign({ business: biz }, d));
       var looseChange = String(lz.loose) !== String(p.loose) || String(lz.perPack) !== String(p.perPack);
-      var priceChange = num_(d.price) !== num_(p.price) || (d.cost !== undefined && num_(d.cost) !== num_(p.cost)) || String(lz.looseTable) !== String(p.looseTable);
+      var curChange = d.priceCur !== undefined && ((usd ? 'USD' : '') !== String(p.priceCur || '') || (usd && num_(d.priceUSD) !== num_(p.priceUSD)) || (usd && d.costUSD !== undefined && num_(d.costUSD) !== num_(p.costUSD)));
+      var priceChange = curChange || num_(d.price) !== num_(p.price) || (d.cost !== undefined && num_(d.cost) !== num_(p.cost)) || String(lz.looseTable) !== String(p.looseTable);
       if (looseChange) need_(u, 'manageProducts');
       if (priceChange) need_(u, 'changePrices');
       if (!priceChange && !can_(u, 'manageProducts') && !can_(u, 'changePrices')) need_(u, 'manageProducts');
@@ -1104,6 +1153,8 @@ var ACTIONS = {
       p.name = name; p.barcode = barcode; p.price = num_(d.price);
       if (d.cost !== undefined) p.cost = num_(d.cost);
       p.loose = lz.loose; p.perPack = lz.perPack; p.looseTable = lz.looseTable;
+      if (d.priceCur !== undefined) { p.priceCur = usd ? 'USD' : ''; p.priceUSD = usd ? d.priceUSD : ''; if (!usd) p.costUSD = ''; else if (d.costUSD !== undefined) p.costUSD = d.costUSD; }
+      if (curChange) log.priceUSD = usd ? '$' + p.priceUSD : 'SH';
       if (looseChange) log.loose = isOn_(p.loose) ? 'on (' + p.perPack + ' pcs)' : 'off';
       if (can_(u, 'manageProducts')) {
         p.category = str_(d.category, 40); p.lowStock = num_(d.lowStock); p.expiry = str_(d.expiry, 10);
@@ -1272,6 +1323,10 @@ var ACTIONS = {
       else { insert_('Settings', { key: k, value: v, note: DEFAULT_SETTINGS[k][1] }); changed.push(k + ': ' + v); }
     });
     T_._settings = null;
+    if (changed.some(function (c) { return c.indexOf('usdRate:') === 0; })) {
+      var n = repriceUsd_();
+      if (n) changed.push(n + ' dollar-priced items re-priced');
+    }
     if (changed.length) audit_(u, 'settings', changed.join('; '));
     return boot_(u, {});
   },
@@ -1386,7 +1441,7 @@ function receivePo_(u, po, s, lines) {
       var p = find_('Products', it.refId); if (!p) return;
       var add = pieces_(p, it.qty, 'pk');   // ordered in packets
       var before = num_(p.stock); if (p.business === 'shop') p.stock = before + add;
-      if (num_(it.cost) > 0) p.cost = num_(it.cost); p.updatedAt = now; update_('Products', p);
+      if (num_(it.cost) > 0) { p.cost = num_(it.cost); if (isUsd_(p)) p.costUSD = Math.round(p.cost / rate_() * 100) / 100; } p.updatedAt = now; update_('Products', p);
       if (p.business === 'shop') insert_('StockLog', { id: uid_('SL'), ts: now, date: today_(), business: p.business, productId: p.id, name: p.name, type: 'purchase',
                                    before: before, after: p.stock, diff: add, userName: u.name, note: po.poNo });
     }
@@ -1400,6 +1455,18 @@ function receivePo_(u, po, s, lines) {
 }
 
 // Reads the "sell loose" fields sent by the product form into product p.
+// New dollar rate: every item priced in dollars gets its shilling price/cost again. Old sales keep their prices.
+function isUsd_(p) { return p && p.priceCur === 'USD' && num_(p.priceUSD) > 0; }
+function repriceUsd_() {
+  var rate = rate_(), n = 0, now = nowIso_();
+  table_('Products').rows.forEach(function (p) {
+    if (!isUsd_(p)) return;
+    var price = Math.round(num_(p.priceUSD) * rate), cost = num_(p.costUSD) > 0 ? Math.round(num_(p.costUSD) * rate) : num_(p.cost);
+    if (price === num_(p.price) && cost === num_(p.cost)) return;
+    p.price = price; p.cost = cost; p.updatedAt = now; update_('Products', p); n++;
+  });
+  return n;
+}
 function setLoose_(p, d) {
   var on = isOn_(d.loose) && (d.business || p.business) === 'shop';
   if (!on) { p.loose = ''; return p; }
@@ -1423,16 +1490,20 @@ function addExpense_(u, biz, cat, amt, method, ref, note, id, more) {
 }
 
 // Money a sale brought in, per account and currency (works for old sales too).
+// What a sale puts into its account (sh/usd) and, for Zaad/Edahab with change, what leaves the cash drawer (cashSH).
 function saleMoney_(x) {
   var cur = x.payCur || (x.method === 'cash' && x.tenderCur === 'USD' && num_(x.tendered) > 0 ? 'USD' : 'SH');
   var usd = num_(x.usdAmount) || (cur === 'USD' && x.method === 'cash' ? num_(x.tendered) : 0);
-  if (x.method === 'cash' && cur === 'USD') return { sh: -num_(x.change), usd: usd };   // dollars in, change out in SH
-  if (cur === 'USD') return { sh: 0, usd: usd };
-  return { sh: num_(x.total), usd: 0 };
+  if (x.method === 'cash' && cur === 'USD') return { sh: -num_(x.change), usd: usd, cashSH: 0 };   // dollars in, change out in SH
+  if (x.method !== 'cash' && num_(x.tendered) > 0 && num_(x.change) > 0)                          // Zaad/Edahab sent more: change paid in cash
+    return cur === 'USD' ? { sh: 0, usd: num_(x.tendered), cashSH: -num_(x.change) } : { sh: num_(x.tendered), usd: 0, cashSH: -num_(x.change) };
+  if (cur === 'USD') return { sh: 0, usd: usd, cashSH: 0 };
+  return { sh: num_(x.total), usd: 0, cashSH: 0 };
 }
 function shiftTotals_(s) {
   var t = { cashSales: 0, zaadSales: 0, edSales: 0, creditSales: 0, custPayCash: 0, custPayZaad: 0, custPayEd: 0, expCash: 0, expZaad: 0, expEd: 0, expCashUSD: 0, expZaadUSD: 0, expEdUSD: 0, refCash: 0, refZaad: 0, refEd: 0, saleCount: 0,
-            cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, undoneCount: 0 };
+            cashInSH: 0, cashInUSD: 0, zaadInSH: 0, zaadInUSD: 0, edInSH: 0, edInUSD: 0, cashOutSH: 0, cashOutUSD: 0, undoneCount: 0,
+            changeFromAcct: 0, excashSH: 0, excashUSD: 0, exzaadSH: 0, exzaadUSD: 0, exedSH: 0, exedUSD: 0, exCount: 0, exFees: 0 };
   var key = { cash: 'Cash', zaad: 'Zaad', edahab: 'Ed' }, inKey = { cash: 'cash', zaad: 'zaad', edahab: 'ed' };
   var since = String(s.date || dateOf_(s.openTs)).slice(0, 10);
   recent_('Sales', since).forEach(function (x) {
@@ -1442,7 +1513,16 @@ function shiftTotals_(s) {
     if (x.method === 'credit') { t.creditSales += num_(x.total); return; }
     t[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[x.method]] += num_(x.total);
     var m = saleMoney_(x), k = inKey[x.method];
-    t[k + 'InSH'] += m.sh; t[k + 'InUSD'] += m.usd;
+    t[k + 'InSH'] += m.sh; t[k + 'InUSD'] += m.usd; t.cashInSH += m.cashSH; if (m.cashSH) t.changeFromAcct += -m.cashSH;
+  });
+  // exchanges: money into one place, out of the other
+  recent_('Exchanges', since).forEach(function (x) {
+    if (x.shiftId !== s.id || x.status === 'undone') return;
+    var acct = x.account === 'edahab' ? 'ed' : 'zaad', r = num_(x.recvAmount), g = num_(x.giveAmount);
+    var rIn = x.dir === 'out' ? 'cash' : acct, gOut = x.dir === 'out' ? acct : 'cash';
+    t['ex' + rIn + (x.recvCur === 'USD' ? 'USD' : 'SH')] += r;
+    t['ex' + gOut + (x.giveCur === 'USD' ? 'USD' : 'SH')] -= g;
+    t.exCount++; t.exFees += num_(x.fee);
   });
   recent_('CustLedger', since).forEach(function (x) { if (x.shiftId === s.id && x.type === 'payment' && key[x.method]) t['custPay' + key[x.method]] += num_(x.amount); });
   recent_('Expenses', since).forEach(function (x) {
@@ -1452,12 +1532,12 @@ function shiftTotals_(s) {
   recent_('Refunds', since).forEach(function (x) { if (x.shiftId === s.id && x.status === 'approved' && key[x.method]) t['ref' + key[x.method]] += num_(x.amount); });
   recent_('CashMoves', since).forEach(function (x) { if (x.shiftId === s.id) t[x.currency === 'USD' ? 'cashOutUSD' : 'cashOutSH'] += num_(x.amount); });
   var rate = num_(s.rate) || rate_(), r2 = function (v) { return Math.round(v * 100) / 100; };
-  t.eCashSH = num_(s.openCash) + t.cashInSH + t.custPayCash - t.expCash - t.refCash - t.cashOutSH;
-  t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD - t.expCashUSD);
-  t.eZaadSH = num_(s.openZaadSH) + t.zaadInSH + t.custPayZaad - t.expZaad - t.refZaad;
-  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD - t.expZaadUSD);
-  t.eEdSH = num_(s.openEdSH) + t.edInSH + t.custPayEd - t.expEd - t.refEd;
-  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD - t.expEdUSD);
+  t.eCashSH = num_(s.openCash) + t.cashInSH + t.custPayCash - t.expCash - t.refCash - t.cashOutSH + t.excashSH;
+  t.eCashUSD = r2(num_(s.openCashUSD) + t.cashInUSD - t.cashOutUSD - t.expCashUSD + t.excashUSD);
+  t.eZaadSH = num_(s.openZaadSH) + t.zaadInSH + t.custPayZaad - t.expZaad - t.refZaad + t.exzaadSH;
+  t.eZaadUSD = r2(num_(s.openZaadUSD) + t.zaadInUSD - t.expZaadUSD + t.exzaadUSD);
+  t.eEdSH = num_(s.openEdSH) + t.edInSH + t.custPayEd - t.expEd - t.refEd + t.exedSH;
+  t.eEdUSD = r2(num_(s.openEdUSD) + t.edInUSD - t.expEdUSD + t.exedUSD);
   t.totalExpSH = t.eCashSH + t.eZaadSH + t.eEdSH;
   t.totalExpUSD = r2(t.eCashUSD + t.eZaadUSD + t.eEdUSD);
   // same money counted in SH (older screens and reports use these)
@@ -1533,6 +1613,7 @@ function report_(u, d) {
   });
   var shifts = table_('Shifts').rows.filter(inR).map(function (x) { return Object.assign(clean_(x), lateInfo_(x)); });
   var cashMoves = table_('CashMoves').rows.filter(inR).map(clean_);
+  var exchanges = table_('Exchanges').rows.filter(function (x) { return inR(x) && x.status !== 'undone'; }).map(clean_);
   var undone = table_('Sales').rows.filter(function (x) { return inR(x) && GONE[x.status]; })
     .map(function (x) { return { id: x.id, ts: x.ts, userName: x.userName, total: num_(x.total), method: x.method, status: x.status, undoneBy: x.undoneBy, reason: x.undoReason }; });
   var top = Object.keys(items).map(function (k) { var i = items[k]; if (!profitOk) delete i.profit; return i; });
@@ -1546,7 +1627,7 @@ function report_(u, d) {
     looseSales: looseSales,
     expenses: Object.keys(expCats).map(function (k) { return expCats[k]; }),
     lowStock: lowStock, lowIngredients: lowIng, expiring: expiring, debts: debts, totalDebt: debts.reduce(function (a, c) { return a + c.balance; }, 0),
-    suppliersOwed: supOwed, balances: balances, shifts: shifts, cashMoves: cashMoves, undone: undone,
+    suppliersOwed: supOwed, balances: balances, shifts: shifts, cashMoves: cashMoves, exchanges: exchanges, undone: undone,
     pendingRefunds: table_('Refunds').rows.filter(function (r) { return r.status === 'pending' && biz.indexOf(r.business) >= 0; }).length,
     openOrders: table_('PurchaseOrders').rows.filter(function (o) { return o.status === 'SENT' && biz.indexOf(o.business) >= 0; }).length,
     profitVisible: profitOk
@@ -1848,7 +1929,7 @@ function reportEmailHtml_(title, r, kind) {
 }
 
 /* ---------- data size, reset, archive ---------- */
-var HISTORY_ = ['Sales', 'SaleItems', 'Shifts', 'CashMoves', 'Expenses', 'Refunds', 'CustLedger', 'SupLedger', 'PurchaseOrders', 'StockLog', 'IngLog', 'Audit'];
+var HISTORY_ = ['Sales', 'SaleItems', 'Shifts', 'CashMoves', 'Exchanges', 'Expenses', 'Refunds', 'CustLedger', 'SupLedger', 'PurchaseOrders', 'StockLog', 'IngLog', 'Audit'];
 function folder_(parent, name) {
   var it = parent ? parent.getFoldersByName(name) : DriveApp.getFoldersByName(name);
   return it.hasNext() ? it.next() : (parent ? parent.createFolder(name) : DriveApp.createFolder(name));
@@ -1891,7 +1972,7 @@ function reset_(u, d) {
 }
 var RESET_PARTS_ = {
   sales: function () { clear_('Sales'); clear_('SaleItems'); clear_('Refunds'); clear_('MonthlySummary'); table_('Products').rows.forEach(function (p) { if (num_(p.sold)) { p.sold = 0; update_('Products', p); } }); },
-  shifts: function () { clear_('Shifts'); clear_('CashMoves'); },
+  shifts: function () { clear_('Shifts'); clear_('CashMoves'); clear_('Exchanges'); },
   expenses: function () { clear_('Expenses'); },
   customers: function () { clear_('Customers'); clear_('CustLedger'); },
   custBalances: function (u) {
@@ -1944,7 +2025,7 @@ var RESET_PARTS_ = {
 
 var ARCHIVE_RULES_ = {
   Sales: function (r, c) { return r.date < c; }, SaleItems: function (r, c) { return r.date < c; },
-  Shifts: function (r, c) { return r.status === 'closed' && r.date < c; }, CashMoves: function (r, c) { return r.date < c; },
+  Shifts: function (r, c) { return r.status === 'closed' && r.date < c; }, CashMoves: function (r, c) { return r.date < c; }, Exchanges: function (r, c) { return r.date < c; },
   Expenses: function (r, c) { return r.date < c; }, Refunds: function (r, c) { return r.status !== 'pending' && r.date < c; },
   CustLedger: function (r, c) { return r.date < c && r.type !== 'opening'; }, SupLedger: function (r, c) { return r.date < c && r.type !== 'opening'; },
   PurchaseOrders: function (r, c) { return (r.status === 'RECEIVED' || r.status === 'CANCELLED') && r.date < c; },

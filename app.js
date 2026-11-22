@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -265,6 +265,7 @@
     menu: ['p:M4 7h16M4 12h16M4 17h16'],
     chart: ['p:M3 21h18', 'p:M7 17v-5', 'p:M12 17V7', 'p:M17 17v-8'],
     wallet: ['p:M19 7V5a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V6', 'p:M16.5 14h.01'],
+    swap: ['p:M7 4 3 8l4 4', 'p:M3 8h14', 'p:m17 20 4-4-4-4', 'p:M21 16H7'],
     undo: ['p:M3 12a9 9 0 1 0 3-6.7L3 8', 'p:M3 3v5h5'],
     box: ['p:M21 8 12 3 3 8v8l9 5 9-5z', 'p:M3 8l9 5 9-5', 'p:M12 13v8'],
     food: ['p:M6 3v7a2 2 0 0 0 4 0V3', 'p:M8 10v11', 'p:M18 21V3c-2.2 1.2-3.5 4-3.5 7.5V13H18'],
