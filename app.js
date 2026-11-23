@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.7.1';
+  const APP_VERSION = '1.7.2';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */
@@ -227,7 +227,7 @@
       LS.set('session', { token: S.token, expires: S.expires, user: S.user });
       // re-apply sales still waiting in the queue so local stock stays right
       S.queue.forEach(op => { if (op.action === 'shift.open' && !S.data.shifts.some(x => x.id === op.data.id)) S.data.shifts.push(Object.assign({ status: 'open', userId: op.userId, userName: op.userName, openTs: op.ts.slice(0, 19), rate: rate() }, op.data)); });
-      S.queue.forEach(op => { if (op.action === 'sale.create' && op.data.business === 'shop') op.data.items.forEach(it => { const p = findProd(it.productId); if (p) p.stock = num(p.stock) - num(it.qty); }); });
+      S.queue.forEach(op => { if (op.action === 'sale.create' && op.data.business === 'shop') op.data.items.forEach(it => { const p = findProd(it.productId); if (p) p.stock = num(p.stock) - piecesOf(p, it.qty, it.unit); }); });
       saveData(); updateTop();
       return sig(S.data) !== before ? 'changed' : true;
     } catch (e) { if (!quiet) toast(e.message, 'err'); return false; }
