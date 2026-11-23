@@ -1,14 +1,14 @@
 /* Saado POS — service worker: keeps the app working offline.
    IMPORTANT: change VERSION on every release so phones download the new files. */
-const VERSION = 'saado-v1.7.0';
-const SHELL = ['./', 'index.html', 'app.css?v=1.7.0', 'config.js?v=1.7.0', 'i18n.js?v=1.7.0', 'guide.js?v=1.7.0', 'app.js?v=1.7.0', 'screens.js?v=1.7.0',
+const VERSION = 'saado-v1.7.1';
+const SHELL = ['./', 'index.html', 'app.css?v=1.7.1', 'config.js?v=1.7.1', 'i18n.js?v=1.7.1', 'guide.js?v=1.7.1', 'app.js?v=1.7.1', 'screens.js?v=1.7.1',
   'manifest.json', 'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/favicon.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== 'saado-cdn').map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.indexOf('saado-') === 0 && k !== VERSION && k !== 'saado-cdn')   // only this app's old copies (other apps share this web address).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', e => {
   const req = e.request;
