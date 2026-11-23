@@ -12,7 +12,7 @@
  * The server never trusts prices from the phone: totals are recalculated from the Products tab.
  */
 
-var VERSION = '1.6.0';
+var VERSION = '1.7.0';
 var TZ = 'Africa/Mogadishu';          // Somaliland time (UTC+3)
 var TOKEN_HOURS = 6;
 var MAX_FAILS = 5, LOCK_MINUTES = 5;  // wrong-PIN lockout
@@ -22,7 +22,9 @@ var SCHEMA = {
   Users:      ['id', 'name', 'role', 'business', 'pinHash', 'salt', 'active', 'lang', 'afterHours', 'perms', 'createdAt', 'pinChanged'],
   Products:   ['id', 'business', 'name', 'barcode', 'category', 'price', 'cost', 'stock', 'lowStock', 'expiry', 'active', 'fav', 'sold', 'updatedAt', 'lowAlerted', 'deleted', 'loose', 'perPack', 'looseTable', 'priceCur', 'priceUSD', 'costUSD'],
   Sales:      ['id', 'ts', 'date', 'business', 'userId', 'userName', 'shiftId', 'method', 'orderType', 'customerId', 'customerName', 'subtotal', 'discount', 'total', 'cost', 'tendered', 'tenderCur', 'change', 'status', 'refunded', 'note',
-               'payCur', 'usdAmount', 'undoneBy', 'undoneTs', 'undoReason'],
+               'payCur', 'usdAmount', 'undoneBy', 'undoneTs', 'undoReason',
+               // credit sale with part paid at the sale: partPaid in partCur through partMethod (cash/zaad/edahab); partSH = the same in SH
+               'partPaid', 'partMethod', 'partCur', 'partSH'],
   SaleItems:  ['saleId', 'date', 'business', 'productId', 'name', 'qty', 'price', 'cost', 'lineTotal', 'unit'],
   Shifts:     ['id', 'business', 'userId', 'userName', 'status', 'openTs', 'closeTs', 'date', 'openCash', 'openZaadSH', 'openZaadUSD', 'openEdSH', 'openEdUSD',
                'closeCash', 'closeZaadSH', 'closeZaadUSD', 'closeEdSH', 'closeEdUSD', 'rate',
@@ -545,11 +547,21 @@ var ACTIONS = {
       if (change < 0) throw new Error('The amount sent is less than the total');
       payCur = cur; usdAmount = cur === 'USD' ? tendered : 0;
     } else if (method !== 'cash') { tendered = 0; change = 0; }
+    // Credit sale, part paid now (e.g. 4,000 by Zaad of a 6,000 sale): only the rest goes on the customer's balance.
+    var partPaid = 0, partMethod = '', partCur = '', partSH = 0;
+    if (method === 'credit' && num_(d.partPaid) > 0) {
+      partCur = d.partCur === 'USD' ? 'USD' : 'SH';
+      partPaid = partCur === 'USD' ? Math.round(num_(d.partPaid) * 100) / 100 : Math.round(num_(d.partPaid));
+      partMethod = d.partMethod === 'zaad' || d.partMethod === 'edahab' ? d.partMethod : 'cash';
+      partSH = partCur === 'USD' ? Math.round(partPaid * rate_()) : partPaid;
+      if (partSH >= total) throw new Error('Paid now is the whole total. Choose Cash, Zaad or Edahab instead of Credit.');
+    }
     var orderType = biz === 'food' ? str_(d.orderType || 'Take away', 40) : '';
     var sale = { id: id, ts: ts, date: dateOf_(ts), business: biz, userId: u.id, userName: u.name, shiftId: shift ? shift.id : '',
                  method: method, orderType: orderType, customerId: cust ? cust.id : '', customerName: cust ? cust.name : '',
                  subtotal: subtotal, discount: discount, total: total, cost: cost, tendered: tendered, tenderCur: cur, change: change,
-                 status: 'ok', refunded: 0, note: str_(d.note, 200), payCur: payCur, usdAmount: usdAmount };
+                 status: 'ok', refunded: 0, note: str_(d.note, 200), payCur: payCur, usdAmount: usdAmount,
+                 partPaid: partPaid || '', partMethod: partMethod, partCur: partCur, partSH: partSH || '' };
     insert_('Sales', sale);
     insertMany_('SaleItems', lines);
     var now = nowIso_();
@@ -561,9 +573,12 @@ var ACTIONS = {
       update_('Products', p);
     });
     if (cust) {
-      cust.balance = num_(cust.balance) + total; update_('Customers', cust);
+      cust.balance = num_(cust.balance) + total - partSH; update_('Customers', cust);
       insert_('CustLedger', { id: uid_('CL'), ts: ts, date: dateOf_(ts), business: biz, customerId: cust.id, type: 'sale', amount: total, method: 'credit',
-                              ref: id, shiftId: sale.shiftId, userName: u.name, note: '' });
+                              ref: id, shiftId: sale.shiftId, userName: u.name, note: partSH ? 'part paid' : '' });
+      // "salepay" (not "payment"): the money is counted with the sale in the shift totals, so it is not counted twice
+      if (partSH) insert_('CustLedger', { id: uid_('CL'), ts: ts, date: dateOf_(ts), business: biz, customerId: cust.id, type: 'salepay', amount: partSH, method: partMethod,
+                                          ref: id, shiftId: sale.shiftId, userName: u.name, note: partCur === 'USD' ? '$' + partPaid : '' });
     }
     if (discount > 0) audit_(u, 'sale.discount', { sale: id, discount: discount });
     return { ok: true, sale: clean_(sale), stock: touched.map(function (p) { return { id: p.id, stock: p.stock, sold: p.sold }; }),
@@ -613,7 +628,7 @@ var ACTIONS = {
     var ids = {}; sales.forEach(function (x) { ids[x.id] = []; });
     recent_('SaleItems', since).forEach(function (i) { if (ids[i.saleId]) ids[i.saleId].push({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit }); });
     var list = sales.slice(-60).reverse().map(function (x) {
-      return { id: x.id, ts: x.ts, method: x.method, total: x.total, status: x.status, customerName: x.customerName, userId: x.userId, items: ids[x.id] };
+      return { id: x.id, ts: x.ts, method: x.method, total: x.total, status: x.status, customerName: x.customerName, userId: x.userId, items: ids[x.id], partPaid: x.partPaid, partMethod: x.partMethod, partCur: x.partCur, partSH: x.partSH };
     });
     return { ok: true, totals: shiftTotals_(s), moves: moves, exchanges: exchanges, shift: clean_(s), sales: list };
   },
@@ -871,8 +886,9 @@ var ACTIONS = {
     if (s.method === 'credit' && s.customerId) {
       cust = find_('Customers', s.customerId);
       if (cust) {
-        cust.balance = num_(cust.balance) - num_(s.total); update_('Customers', cust);
-        insert_('CustLedger', { id: uid_('CL'), ts: now, date: today_(), business: s.business, customerId: cust.id, type: 'void', amount: num_(s.total), method: 'credit', ref: s.id, shiftId: s.shiftId, userName: u.name, note: reason });
+        var owed = num_(s.total) - num_(s.partSH);   // the part paid at the sale goes back with the sale itself
+        cust.balance = num_(cust.balance) - owed; update_('Customers', cust);
+        insert_('CustLedger', { id: uid_('CL'), ts: now, date: today_(), business: s.business, customerId: cust.id, type: 'void', amount: owed, method: 'credit', ref: s.id, shiftId: s.shiftId, userName: u.name, note: reason + (num_(s.partSH) ? ' (paid part returned: ' + fmt_(s.partSH) + ')' : '') });
       }
     }
     s.status = own ? 'undone' : 'void'; s.undoneBy = u.name; s.undoneTs = now; s.undoReason = reason; update_('Sales', s);
@@ -1561,7 +1577,15 @@ function shiftTotals_(s) {
     if (x.shiftId !== s.id) return;
     if (GONE[x.status]) { t.undoneCount++; return; }
     t.saleCount++;
-    if (x.method === 'credit') { t.creditSales += num_(x.total); return; }
+    if (x.method === 'credit') {
+      var ps = num_(x.partSH); t.creditSales += num_(x.total) - ps;
+      if (ps > 0) {
+        var pk = inKey[x.partMethod] || 'cash';
+        t[{ cash: 'cashSales', zaad: 'zaadSales', ed: 'edSales' }[pk]] += ps;
+        if (x.partCur === 'USD') t[pk + 'InUSD'] += num_(x.partPaid); else t[pk + 'InSH'] += ps;
+      }
+      return;
+    }
     t[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[x.method]] += num_(x.total);
     var m = saleMoney_(x), k = inKey[x.method];
     t[k + 'InSH'] += m.sh; t[k + 'InUSD'] += m.usd; t.cashInSH += m.cashSH; if (m.cashSH) t.changeFromAcct += -m.cashSH;
@@ -1612,10 +1636,11 @@ function report_(u, d) {
   var sales = table_('Sales').rows.filter(function (x) { return inR(x) && !GONE[x.status]; }), saleIds = {};
   sales.forEach(function (s) {
     var b = byBiz[s.business]; saleIds[s.id] = 1;
-    b.count++; b.subtotal += num_(s.subtotal); b.discount += num_(s.discount); b.sales += num_(s.total); b.cost += num_(s.cost); b[s.method] += num_(s.total);
+    var ps = s.method === 'credit' ? num_(s.partSH) : 0, pm = s.partMethod || 'cash';
+    b.count++; b.subtotal += num_(s.subtotal); b.discount += num_(s.discount); b.sales += num_(s.total); b.cost += num_(s.cost); b[s.method] += num_(s.total) - ps; if (ps) b[pm] += ps;
     var k = s.date + '|' + s.business;
     var dd = days[k] || (days[k] = { date: s.date, business: s.business, count: 0, total: 0, cash: 0, zaad: 0, edahab: 0, credit: 0 });
-    dd.count++; dd.total += num_(s.total); dd[s.method] += num_(s.total);
+    dd.count++; dd.total += num_(s.total); dd[s.method] += num_(s.total) - ps; if (ps) dd[pm] += ps;
     var e = emp[s.userName + '|' + s.business] || (emp[s.userName + '|' + s.business] = { name: s.userName, business: s.business, count: 0, total: 0 });
     e.count++; e.total += num_(s.total);
   });

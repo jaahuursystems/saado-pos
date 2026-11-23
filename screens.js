@@ -62,6 +62,12 @@
   }
   const piecesInCart = id => { const p = findProd(id); return S.cart.filter(x => x.productId === id).reduce((a, l) => a + A.piecesOf(p, l.qty, l.unit), 0); };
   function stockTxt(p) { return S.biz === 'shop' && can('viewStock') ? ` · ${t('Stock')}: ${A.stockTxt(p)}` : ''; }
+  // "Zaad 4,000 + Credit 2,000" for a part-paid credit sale, otherwise the method name
+  const payTxt = s => {
+    const pv = num(s.partPaid); if (s.method !== 'credit' || !pv) return A.methodName(s.method);
+    const ps = num(s.partSH) || (s.partCur === 'USD' ? Math.round(pv * A.rate()) : pv), tot = num(s.total) || 0;
+    return A.methodName(s.partMethod || 'cash') + ' ' + (s.partCur === 'USD' ? usdF(pv) : fmt(ps)) + (tot ? ' + ' + A.methodName('credit') + ' ' + fmt(tot - ps) : '');
+  };
   const soldTxt = i => (num(i.qty) ? '×' + fmt(i.qty) : '') + (num(i.pcs) ? (num(i.qty) ? ' + ' : '') + fmt(i.pcs) + ' ' + t('pcs') : '');
   const usdTag = p => p && p.priceCur === 'USD' && num(p.priceUSD) > 0 ? ` <span class="usd">${esc(usdF(p.priceUSD))}</span>` : '';
   const looseTag = p => (A.isLoose(p) ? ` <span class="lz">${esc(t('LOOSE'))}</span>` : '') + usdTag(p);
@@ -264,6 +270,28 @@
         $('#sent', el).oninput = e => { st.sent = e.target.value; drawSent(); };
         drawSent();
         seg($('#pcur', el), v => { st.payCur = v; st.sent = ''; drawMethod(); });
+      } else if (st.customerId && (S.data.customers || []).some(c => c.id === st.customerId)) {
+        // customer chosen: optionally part paid now, the rest goes on the balance
+        const c = S.data.customers.find(x => x.id === st.customerId);
+        st.partMethod = st.partMethod || 'cash'; st.partCur = st.partCur || 'SH';
+        box.innerHTML = `<div class="pickc"><span class="av">${I('user')}</span><div class="grow"><b>${esc(c.name)}</b><span class="s">${esc(t('Owes now: {x}', { x: money(c.balance) }))}${c.phone ? ' · ' + esc(c.phone) : ''}</span></div><button type="button" class="btn sm text" id="chgc">${esc(t('Change'))}</button></div>
+          <label class="f" style="margin-top:10px"><span>${esc(t('Paid now? (optional)'))}</span><div class="seg" id="pm"><button data-v="cash" class="${st.partMethod === 'cash' ? 'on' : ''}">${esc(A.methodName('cash'))}</button><button data-v="zaad" class="${st.partMethod === 'zaad' ? 'on' : ''}">Zaad</button><button data-v="edahab" class="${st.partMethod === 'edahab' ? 'on' : ''}">Edahab</button></div></label>
+          <div class="row" style="margin-top:-4px"><input class="in big grow" id="part" inputmode="decimal" value="${esc(st.partPaid || '')}" placeholder="0">
+            <div class="seg" id="pcc" style="flex:0 0 130px;flex-wrap:nowrap;margin-left:8px"><button data-v="SH" class="${st.partCur === 'SH' ? 'on' : ''}">SH</button><button data-v="USD" class="${st.partCur === 'USD' ? 'on' : ''}">USD</button></div></div>
+          <div id="split"></div>`;
+        const drawSplit = () => {
+          const v = num(st.partPaid), psh = st.partCur === 'USD' ? Math.round(v * A.rate()) : v, rest = tt.total - psh, first = c.name.split(' ')[0];
+          $('#split', el).innerHTML = !v ? `<div class="bal">${esc(t('{n}’s balance: {a} → {b}', { n: first, a: fmt(c.balance), b: money(num(c.balance) + tt.total) }))}</div>`
+            : rest <= 0 ? `<div class="changebox neg">${esc(t('That is the whole total. Choose {m} instead of Credit.', { m: A.methodName(st.partMethod) }))}</div>`
+            : `<div class="split"><div class="rowx"><span>${esc(t('Total'))}</span><b>${fmt(tt.total)}</b></div><div class="rowx"><span>${esc(t('Paid now · {m}', { m: A.methodName(st.partMethod) }))}</span><b class="green">−${st.partCur === 'USD' ? usdF(v) + ' (' + fmt(psh) + ')' : fmt(psh)}</b></div>
+               <div class="rowx t"><span>${esc(t('On {n}’s balance', { n: first }))}</span><b style="color:#8A4B00">${money(rest)}</b></div></div>
+               <div class="bal">${esc(t('{n}’s balance: {a} → {b}', { n: first, a: fmt(c.balance), b: money(num(c.balance) + rest) }))}</div>`;
+        };
+        $('#part', el).oninput = e => { st.partPaid = e.target.value; drawSplit(); };
+        seg($('#pm', el), v => { st.partMethod = v; drawSplit(); });
+        seg($('#pcc', el), v => { st.partCur = v; drawSplit(); });
+        $('#chgc', el).onclick = () => { st.customerId = ''; st.partPaid = ''; drawMethod(); };
+        drawSplit();
       } else {
         const list = (S.data.customers || []).filter(c => c.business === biz);
         box.innerHTML = `<label class="f"><span>${esc(t('Credit customer'))}</span><div class="row"><input class="in grow" id="cq" placeholder="${esc(t('Search customer'))}">
@@ -272,10 +300,10 @@
           const v = $('#cq', el).value.toLowerCase();
           const l = list.filter(c => !v || String(c.name).toLowerCase().includes(v) || String(c.phone).includes(v)).slice(0, 40);
           $('#clist', el).innerHTML = l.map(c => `<div class="li tap" data-id="${esc(c.id)}" style="${st.customerId === c.id ? 'background:var(--gold-c)' : ''}"><div class="main"><div class="name">${st.customerId === c.id ? I('check', 'sm') + ' ' : ''}${esc(c.name)}</div><div class="sub">${esc(c.phone || '')}</div></div><span class="${num(c.balance) > 0 ? 'red' : ''}">${fmt(c.balance)}</span></div>`).join('') || `<div class="empty">${esc(t('No customers yet'))}</div>`;
-          $$('#clist .li', el).forEach(r => r.onclick = () => { st.customerId = r.dataset.id; draw(); });
+          $$('#clist .li', el).forEach(r => r.onclick = () => { st.customerId = r.dataset.id; drawMethod(); });
         };
         $('#cq', el).oninput = draw; draw();
-        const nb = $('#newc', el); if (nb) nb.onclick = () => customerForm(null, c => { list.push(c); st.customerId = c.id; draw(); });
+        const nb = $('#newc', el); if (nb) nb.onclick = () => customerForm(null, c => { if (!S.data.customers.some(x => x.id === c.id)) S.data.customers.push(c); st.customerId = c.id; drawMethod(); });
       }
     };
     seg($('[data-name=method]', el), v => { st.method = v; st.sent = ''; drawMethod(); });
@@ -286,6 +314,8 @@
     async function complete(close) {
       const tt = totals();
       if (st.method === 'credit' && !st.customerId) throw new Error(t('Choose a credit customer'));
+      const partV = st.method === 'credit' ? num(st.partPaid) : 0, partSH = st.partCur === 'USD' ? Math.round(partV * A.rate()) : partV;
+      if (partV && partSH >= tt.total) throw new Error(t('Paid now is the whole total. Choose Cash, Zaad or Edahab instead of Credit.'));
       let change = 0;
       if (st.method === 'cash' && st.tendered) {
         change = num(st.tendered) * (st.cur === 'USD' ? A.rate() : 1) - tt.total;
@@ -299,12 +329,12 @@
       const data = { id: A.uid('S'), business: biz, method: st.method, discount: tt.discount,
         tendered: st.method === 'cash' ? num(st.tendered) : acctSent ? num(st.sent) : 0, tenderCur: st.method === 'cash' ? st.cur : st.payCur,
         payCur: st.method === 'zaad' || st.method === 'edahab' ? st.payCur : 'SH',
-        customerId: st.method === 'credit' ? st.customerId : '', orderType: biz === 'food' ? st.orderType : '', ts: new Date().toISOString(),
+        customerId: st.method === 'credit' ? st.customerId : '', partPaid: partV || 0, partMethod: partV ? st.partMethod : '', partCur: partV ? st.partCur : '', orderType: biz === 'food' ? st.orderType : '', ts: new Date().toISOString(),
         items: S.cart.map(l => ({ productId: l.productId, qty: l.qty, name: l.name, unit: l.unit || '' })) };
       enqueue('sale.create', data);
       // update this phone right away (the server checks again)
       S.cart.forEach(l => { const p = findProd(l.productId); if (p) { const pcs = A.piecesOf(p, l.qty, l.unit); if (biz === 'shop') p.stock = num(p.stock) - pcs; p.sold = num(p.sold) + (A.isLoose(p) ? pcs / num(p.perPack) : l.qty); } });
-      if (st.method === 'credit') { const c = S.data.customers.find(x => x.id === st.customerId); if (c) c.balance = num(c.balance) + tt.total; }
+      if (st.method === 'credit') { const c = S.data.customers.find(x => x.id === st.customerId); if (c) c.balance = num(c.balance) + tt.total - partSH; }
       A.saveData();
       S.cart = []; close(); drawCartBar(); drawResults();
       S.lastSale = data;
@@ -326,7 +356,12 @@
       if (o.action === 'sale.create' && o.userId === S.user.id) {
         const d = o.data, sub = d.items.reduce((a, it) => { const p = findProd(it.productId); return a + (p ? A.lineTotal(Object.assign({ price: p.price }, it)) : 0); }, 0);
         const tot = A.roundStep(sub - num(d.discount)); x.saleCount++; waiting++;
-        if (d.method === 'credit') { x.creditSales += tot; return; }
+        if (d.method === 'credit') {
+          const pv = num(d.partPaid), ps = d.partCur === 'USD' ? Math.round(pv * A.rate()) : pv, pk = { cash: 'cash', zaad: 'zaad', edahab: 'ed' }[d.partMethod] || 'cash';
+          x.creditSales += tot - ps;
+          if (ps) { x[{ cash: 'cashSales', zaad: 'zaadSales', ed: 'edSales' }[pk]] += ps; x[pk + (d.partCur === 'USD' ? 'InUSD' : 'InSH')] += d.partCur === 'USD' ? pv : ps; }
+          return;
+        }
         x[{ cash: 'cashSales', zaad: 'zaadSales', edahab: 'edSales' }[d.method]] += tot;
         const k = { cash: 'cash', zaad: 'zaad', edahab: 'ed' }[d.method];
         if (d.method === 'cash' && d.tenderCur === 'USD' && num(d.tendered) > 0) { x.cashInUSD += num(d.tendered); x.cashInSH -= num(d.tendered) * A.rate() - tot; }
@@ -467,14 +502,14 @@
     const gone = s => s.status === 'undone' || s.status === 'void';
     box.innerHTML = list.length ? `<h3>${esc(t('Sales in my shift'))}</h3><div class="list">${list.slice(0, 40).map(s => `<div class="li" style="${gone(s) ? 'opacity:.55' : ''}"><div class="main">
       <div class="name" style="${gone(s) ? 'text-decoration:line-through' : ''}">${s.local ? esc(t('now')) : String(s.ts).slice(11, 16)} · ${money(s.total)}</div>
-      <div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + (i.unit === 'pc' ? ' · ' + fmt(i.qty) + ' ' + t('pcs') : ' ×' + fmt(i.qty))).join(', ')} · ${esc(A.methodName(s.method))}${s.local ? ' · ' + esc(t('Waiting to send')) : ''}${gone(s) ? ' · ' + esc(t('Undone')) : ''}</div></div>
+      <div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + (i.unit === 'pc' ? ' · ' + fmt(i.qty) + ' ' + t('pcs') : ' ×' + fmt(i.qty))).join(', ')} · ${esc(payTxt(s))}${s.customerName ? ' · ' + esc(s.customerName) : ''}${s.local ? ' · ' + esc(t('Waiting to send')) : ''}${gone(s) ? ' · ' + esc(t('Undone')) : ''}</div></div>
       ${!gone(s) && can('undoSales') ? `<button class="btn sm ghost" data-undo="${esc(s.id)}">${I('undo', 'sm')}${esc(t('Undo'))}</button>` : ''}</div>`).join('')}</div>` : '';
     $$('[data-undo]', box).forEach(b => b.onclick = () => undoSheet(list.find(s => s.id === b.dataset.undo), () => loadLive(sh)));
   }
   function undoSheet(s, done) {
     const reasons = ['Wrong item', 'Wrong price', 'Customer changed mind', 'Wrong payment'];
     let reason = '';
-    const sh = sheet({ title: t('Undo sale {t}?', { t: s.local ? t('now') : String(s.ts).slice(11, 16) }), body: `<div class="totalbox" style="padding:12px"><div class="u">${esc(A.methodName(s.method))}</div><div class="t" style="font-size:28px">${money(s.total)}</div></div>
+    const sh = sheet({ title: t('Undo sale {t}?', { t: s.local ? t('now') : String(s.ts).slice(11, 16) }), body: `<div class="totalbox" style="padding:12px"><div class="u">${esc(payTxt(s))}</div><div class="t" style="font-size:28px">${money(s.total)}</div></div>
       <div class="list"><div class="li lead"><span class="av green" style="width:34px;height:34px">${I('box', 'sm')}</span><div class="main"><div class="name">${esc(t('Stock goes back'))}</div><div class="sub">${(s.items || []).map(i => esc(i.name || (findProd(i.productId) || {}).name || '') + ' +' + fmt(i.qty) + (i.unit === 'pc' ? ' ' + t('pcs') : '')).join(' · ')}</div></div></div>
       <div class="li lead"><span class="av" style="width:34px;height:34px">${I('cash', 'sm')}</span><div class="main"><div class="name">${esc(s.method === 'credit' ? t('Customer debt goes down') : t('Expected money goes down'))}</div><div class="sub">${esc(s.method === 'credit' ? '' : t('Give the money back to the customer'))}</div></div></div></div>
       <label class="f"><span>${esc(t('Reason (required)'))}</span><div class="chips" id="rs">${reasons.map(r => `<button class="chip" data-r="${esc(r)}">${esc(t(r))}</button>`).join('')}</div></label>
@@ -485,7 +520,7 @@
         if (qi >= 0) {   // not sent yet: simply remove it from this phone
           const op = S.queue.splice(qi, 1)[0]; A.LS.set('queue', S.queue);
           op.data.items.forEach(it => { const p = findProd(it.productId); if (p) { const pcs = A.piecesOf(p, it.qty, it.unit); if (op.data.business === 'shop') p.stock = num(p.stock) + pcs; p.sold = Math.max(0, num(p.sold) - (A.isLoose(p) ? pcs / num(p.perPack) : num(it.qty))); } });
-          if (op.data.method === 'credit') { const c = S.data.customers.find(x => x.id === op.data.customerId); if (c) c.balance = num(c.balance) - s.total; }
+          if (op.data.method === 'credit') { const c = S.data.customers.find(x => x.id === op.data.customerId); const pv = num(op.data.partPaid); if (c) c.balance = num(c.balance) - s.total + (op.data.partCur === 'USD' ? Math.round(pv * A.rate()) : pv); }
           A.saveData(); A.updateTop();
         } else {
           needOnline();
@@ -767,7 +802,7 @@
     });
     const wa = $('#wa', el); if (wa) wa.onclick = () => A.openWhatsApp(c.phone, t('Hello {n}, your balance at {b} is {x}. Thank you.', { n: c.name, b: biz, x: money(c.balance) }));
     A.cachedCall('cust.ledger', { customerId: c.id }, r => {
-      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t({ sale: 'Credit sale', payment: 'Payment', refund: 'Refund', void: 'Undone sale', reset: 'Balance reset', opening: 'Carried forward', loan: 'Money taken', loanundo: 'Money taken — undone' }[l.type] || l.type))}${(l.type === 'loan' || l.type === 'loanundo') && l.method ? ' · ' + esc(A.methodName(l.method)) : ''}</div>
+      $('#led', el).innerHTML = `<div class="list">${r.ledger.map(l => `<div class="li"><div class="main"><div class="name">${esc(t({ sale: 'Credit sale', payment: 'Payment', refund: 'Refund', void: 'Undone sale', reset: 'Balance reset', opening: 'Carried forward', loan: 'Money taken', loanundo: 'Money taken — undone', salepay: 'Paid at the sale' }[l.type] || l.type))}${l.type === 'sale' && l.note === 'part paid' ? ` <span class="pp">${esc(t('PART PAID'))}</span>` : ''}${l.type === 'salepay' && l.method ? ' · ' + esc(A.methodName(l.method)) : ''}${(l.type === 'loan' || l.type === 'loanundo') && l.method ? ' · ' + esc(A.methodName(l.method)) : ''}</div>
         <div class="sub">${A.when(l.ts)} · ${esc(l.userName)} ${l.method && l.type === 'payment' ? '· ' + esc(A.methodName(l.method)) : ''}${l.note && (l.type === 'loan' || l.type === 'loanundo') ? ' · ' + esc(l.note) : ''}</div></div>${(() => { const v = l.type === 'sale' || l.type === 'loan' ? num(l.amount) : (l.type === 'reset' || l.type === 'opening') ? num(l.amount) : -num(l.amount); return `<b class="${v > 0 ? 'red' : 'green'}">${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</b>`; })()}</div>`).join('') || `<div class="empty">—</div>`}</div>`;
     }).catch(e => { if ($('#led', el)) $('#led', el).innerHTML = notYet(e); });
   }

@@ -934,6 +934,14 @@ window.SO = {
   "Not taken after all": "Ugu dambeyn lama qaadan",
   "Customer took": "Macmiilka ayaa qaatay",
   "CASH": "CADDAAN",
+  // added in v1.7
+  "Paid now? (optional)": "Hadda ma bixiyey? (ikhtiyaari)",
+  "That is the whole total. Choose {m} instead of Credit.": "Taasi waa wadarta oo dhan. Dooro {m} halkii Deyn.",
+  "Paid now · {m}": "Hadda la bixiyey · {m}",
+  "On {n}’s balance": "Deynta {n} lagu daray",
+  "Paid now is the whole total. Choose Cash, Zaad or Edahab instead of Credit.": "Lacagta hadda la bixiyey waa wadarta oo dhan. Dooro Caddaan, Zaad ama Edahab halkii Deyn.",
+  "PART PAID": "QAYB LA BIXIYEY",
+  "Paid at the sale": "Lagu bixiyey iibka",
   // messages that come from the server
   'Cart is empty': 'Dambiishu waa madhan tahay',
   'Choose a payment method': 'Dooro habka lacag-bixinta',

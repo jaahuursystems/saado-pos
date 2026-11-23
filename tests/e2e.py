@@ -160,7 +160,7 @@ with sync_playwright() as p:
     # ---------- credit customer ----------
     page.click('.tile:has-text("Bariis")'); page.click('#payBtn'); page.click('[data-name=method] button[data-v="credit"]')
     page.click('#newc'); page.fill('.ov:last-child [name=name]', 'Cali Xasan'); page.fill('.ov:last-child [name=phone]', '0634000001'); page.click('.ov:last-child .ft .btn.gold')
-    page.wait_for_selector('#clist .li:has-text("Cali")'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_selector('.pickc:has-text("Cali")'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
     page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
     cust = sheet('Customers'); assert cust[0][4] in (52000, '52000'), cust; step('new customer created from the pay screen + credit sale (balance 52,000)')
     page.click('#nav [data-r="customers"]'); page.click('#cl .li'); page.click('#pay')
@@ -227,6 +227,16 @@ with sync_playwright() as p:
     page.goto(BASE + '/#sell'); page.goto(BASE + '/#shift'); page.wait_for_selector('#moves [data-mvu]'); page.screenshot(path=SHOTS + '09e-money-out-list.png', full_page=True)
     page.click('#moves .li:has-text("Zaad") [data-mvu]'); page.click('#rs .chip[data-r="Wrong person"]'); page.click('.ov .ft .btn.red'); page.wait_for_selector('.toast.ok')
     assert str(sheet('Customers')[0][4]) == '32000'; page.wait_for_selector('#moves .li.gone'); step('undo: Zaad and her balance go back (32,000), record kept as undone')
+    # ---------- credit sale, part paid now: 2 × Coca-Cola = 6,000 → 4,000 Zaad now, 2,000 on Cali's balance ----------
+    page.goto(BASE + '/#sell'); page.click('.tile:has-text("Coca-Cola")'); page.click('.tile:has-text("Coca-Cola")'); page.click('#payBtn')
+    page.click('[data-name=method] button[data-v="credit"]'); page.fill('#cq', 'Cali'); page.click('#clist .li >> nth=0'); page.wait_for_selector('.pickc')
+    page.click('#pm button[data-v="zaad"]'); page.fill('#part', '4000'); page.wait_for_selector('#split .split')
+    assert '2,500' in page.inner_text('#split') and '34,500' in page.inner_text('#split'), page.inner_text('#split')
+    page.screenshot(path=SHOTS + '09f-part-paid.png'); page.click('.ov .ft .btn.gold'); page.wait_for_selector('.toast.ok')
+    page.wait_for_function("!JSON.parse(localStorage.getItem('saado_queue')||'[]').length", timeout=8000)
+    assert str(sheet('Customers')[0][4]) == '34500', sheet('Customers')
+    S = dict(zip(sheet('Sales', header=True)[0], sheet('Sales')[-1])); assert S['method'] == 'credit' and str(S['partSH']) == '4000' and S['partMethod'] == 'zaad', S
+    step('credit sale 6,500 with 4,000 Zaad paid now: only 2,500 added (32,000 → 34,500)')
     # ---------- exchange: customer sends 10,000 Zaad, takes 10,000 cash ----------
     page.goto(BASE + '/#shift'); page.wait_for_selector('#exb'); page.click('#exb'); page.wait_for_selector('#xr')
     page.fill('#xr', '10000'); assert page.input_value('#xg') == '10000'; assert 'Khidmad ma jirto' in page.inner_text('#xfee'), page.inner_text('#xfee')

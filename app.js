@@ -8,7 +8,7 @@
 (function () {
   'use strict';
   const CFG = window.SAADO_CONFIG || {};
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.7.0';
   const TZ = 'Africa/Mogadishu';
 
   /* ---------------- storage ---------------- */

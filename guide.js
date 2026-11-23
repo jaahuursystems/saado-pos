@@ -10,6 +10,7 @@ window.GUIDE = {
 <li>Taabo <b>Bixi</b>. Dooro <b>Caddaan / Zaad / Edahab / Deyn</b>.</li>
 <li>Caddaan: geli lacagta uu bixiyey (SH ama USD) — baaqiga waxaa lagu tusayaa SH.</li>
 <li>Zaad / Edahab: macmiilka tus lambarka akoonka. Hubi in lacagtu timid.</li>
+<li>Deyn qayb la bixiyey (tusaale 6,000: 4,000 Zaad hadda, 2,000 deyn): dooro <b>Deyn</b> → macmiilka → <b>Hadda ma bixiyey?</b> → Zaad → 4,000. 2,000 oo keliya ayaa lagu daraa deyntiisa.</li>
 <li>Zaad / Edahab: dooro <b>SH</b> ama <b>USD</b> — sida macmiilku u bixiyey. Macmiilku ma soo diray wax ka badan (tusaale 4,000 iib 2,000 ah)? Qor <b>inta timid</b>; app-ku wuxuu kuu sheegayaa baaqiga aad caddaan ahaan u celinayso.</li>
 <li>Taabo <b>Dhammee iibka</b>.</li>
 <li>Macmiil kale ayaa yimid? Taabo <b>Dhig</b> (dambiisha hoose). Dabadeed ka soo celi badhanka sare.</li>
@@ -65,6 +66,7 @@ window.GUIDE = {
 <li>Tap <b>Pay</b>. Choose <b>Cash / Zaad / Edahab / Credit</b>.</li>
 <li>Cash: type what the customer gave (SH or USD) — change is shown in SH.</li>
 <li>Zaad / Edahab: show the customer the account number. Check the money arrived.</li>
+<li>Part paid, rest on credit (e.g. 6,000: 4,000 Zaad now, 2,000 on credit): choose <b>Credit</b> → the customer → <b>Paid now?</b> → Zaad → 4,000. Only 2,000 goes on their balance.</li>
 <li>Zaad / Edahab: choose <b>SH</b> or <b>USD</b> — how the customer paid. Customer sent more (e.g. 4,000 for a 2,000 sale)? Type <b>what arrived</b>; the app tells you the change to give in cash.</li>
 <li>Tap <b>Complete sale</b>.</li>
 <li>Another customer is waiting? Tap <b>Park</b> (on the cart bar). Bring it back later from the button at the top.</li>
